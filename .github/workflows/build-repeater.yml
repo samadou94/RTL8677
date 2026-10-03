@@ -11,63 +11,89 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install host dependencies
+      - name: Install host tools
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             subversion \
+            flex \
+            bison \
+            gperf \
+            ncurses-dev \
             libncurses5-dev \
-            libncurses-dev \
-            libc6-i386 \
+            libc6:i386 \
+            libgcc-s1:i386 \
             zlib1g:i386
 
-      - name: Prepare legacy RSDK
+      - name: Fix legacy SDK host build
         shell: bash
         run: |
-          RSDK="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
-          RSDKDST="/opt/tbs_toolchains/realtek/$(basename "$RSDK")"
+          cd RTL8676xx
 
-          sudo mkdir -p /opt/tbs_toolchains/realtek
-          sudo ln -sfn "$RSDK" "$RSDKDST"
+          # BusyBox/kernel-era Makefiles use non-POSIX '[ -a file ]'.
+          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
 
-          chmod -R a+rx "$RSDK/bin" "$RSDK/lib" "$RSDK/libexec"
+          # The GitHub checkout is not an SVN working copy.
+          sed -i 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
 
-          echo "$RSDK/bin" >> "$GITHUB_PATH"
+          # The archive contains the generated kconfig parser as *_shipped.
+          # The old scripts/Makefile expects the un-suffixed filenames.
+          cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
+          cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
+          cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
-          file "$RSDK/bin/rsdk-linux-gcc"
-          "$RSDK/bin/rsdk-linux-gcc" --version
-
-      - name: Enable RTL8192CD client + Universal Repeater
+      - name: Enable Universal Repeater
         shell: bash
         run: |
           CFG="customer/product/DSL2750U/defconfig"
 
+          grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
+
           sed -i \
-            's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' \
+            's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' \
             "$CFG"
 
           sed -i \
-            's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' \
+            's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' \
             "$CFG"
 
-          grep -E 'CONFIG_RTL8192CD=|CONFIG_RTL_CLIENT_MODE_SUPPORT=|CONFIG_RTL_REPEATER_MODE_SUPPORT=|CONFIG_RTL_VAP_SUPPORT=' "$CFG"
+          grep -E \
+            'CONFIG_RTL8192CD=|CONFIG_RTL_CLIENT_MODE_SUPPORT=|CONFIG_RTL_REPEATER_MODE_SUPPORT=|CONFIG_RTL_VAP_SUPPORT=' \
+            "$CFG"
 
-      - name: Build
+      - name: Prepare bundled RSDK
+        shell: bash
+        run: |
+          RSDK="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+
+          # The SDK expects its cross compiler on PATH.
+          echo "$RSDK/bin" >> "$GITHUB_PATH"
+
+          chmod -R a+rx "$RSDK/bin" "$RSDK/mips-linux"
+
+          echo "PATH=$RSDK/bin:$PATH"
+          which mips-linux-gcc
+          file "$RSDK/bin/mips-linux-gcc"
+          "$RSDK/bin/mips-linux-gcc" --version || true
+
+      - name: Build DSL2750U
         shell: bash
         run: |
           cd RTL8676xx
-          make autobuild AUTOPRODUCT=DSL2750U V=1
+          make autobuild AUTOPRODUCT=DSL2750U
 
-      - name: Verify image
+      - name: Verify output
         shell: bash
         run: |
+          set -e
+          find RTL8676xx/build -maxdepth 4 -type f \
+            \( -name 'image.img' -o -name 'image.bin' \) -print
           test -f RTL8676xx/build/romfs/image.img
           ls -lh RTL8676xx/build/romfs/image.img
-          file RTL8676xx/build/romfs/image.img
 
-      - name: Upload firmware artifact
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: dsl2750u-repeater-build
