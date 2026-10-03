@@ -16,40 +16,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential flex bison gperf ncurses-dev subversion
 
-      - name: Prepare legacy SDK
+      - name: Prepare SDK
         shell: bash
         run: |
           set -eux
 
           SDK="$GITHUB_WORKSPACE/RTL8676xx"
           RSDK="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+
           cd "$SDK"
 
-          # The SDK expects the toolchain at this hard-coded location.
-          sudo mkdir -p /opt/tbs_toolchains/realtek
-          sudo ln -sfn "$RSDK" \
-            /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
+          # This legacy script is always invoked through /bin/sh.
+          # Replace Bash-only "source" with POSIX "." so arch.mk is loaded.
+          sed -i 's/^source /./' tools/mkbuilddir
 
-          echo "$RSDK/bin" >> "$GITHUB_PATH"
-
-          # Git checkout is not an SVN working copy. Keep the old checks harmless.
-          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
+          # Git checkout is not an SVN working copy.
           sed -i 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
 
-          # The generated kconfig parser files are shipped in the source archive.
+          # Fix old non-POSIX test syntax in the top Makefile.
+          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
+
+          # Use the shipped Kconfig parser sources.
           cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
           cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
           # autobuild does not need interactive menuconfig.
-          # Avoid the legacy mconf/ncurses linker problem.
           sed -i 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
-          # Enable the two RTL8192CD features needed for Universal Repeater.
+          # The SDK hardcodes this toolchain location.
+          sudo mkdir -p /opt/tbs_toolchains/realtek
+          sudo ln -sfn "$RSDK" \
+            /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
+
+          echo "$RSDK/bin" >> "$GITHUB_PATH"
+          export PATH="$RSDK/bin:$PATH"
+
+          # Enable RTL8192CD client + Universal Repeater.
           CFG="$GITHUB_WORKSPACE/customer/product/DSL2750U/defconfig"
+
           sed -i \
             's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' \
             "$CFG"
+
           sed -i \
             's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' \
             "$CFG"
@@ -60,8 +69,7 @@ jobs:
             "$CFG"
 
           echo "=== TOOLCHAIN ==="
-          ls -l "$RSDK/bin/rsdk-linux-gcc"
-          "$RSDK/bin/rsdk-linux-gcc" --version || true
+          find "$RSDK/bin" -maxdepth 1 -type f -name 'rsdk-linux-*' -print | head -20
 
       - name: Build
         shell: bash
@@ -71,7 +79,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/RTL8676xx"
           make autobuild AUTOPRODUCT=DSL2750U V=1
 
-      - name: Verify output
+      - name: Verify image
         shell: bash
         run: |
           set -eux
