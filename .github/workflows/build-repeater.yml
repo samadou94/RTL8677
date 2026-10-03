@@ -1,4 +1,4 @@
-name: Build DSL-2750U Repeater
+name: Build DSL2750U Repeater
 
 on:
   workflow_dispatch:
@@ -8,101 +8,81 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install host dependencies
+      - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential subversion flex bison gperf ncurses-dev libncurses5-dev
+          sudo apt-get install -y build-essential flex bison gperf ncurses-dev subversion
 
       - name: Prepare legacy SDK
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
 
-          cd "$GITHUB_WORKSPACE/RTL8676xx"
-
-          # Old SDK uses non-POSIX '[ -a ... ]'.
-          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
-
-          # GitHub checkout is not an SVN working copy. Keep the check from
-          # producing the E155007 warning/failure.
-          sed -i 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
-
-          # The archive already contains shipped Kconfig parser sources.
-          cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
-          cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
-          cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
-
+          SDK="$GITHUB_WORKSPACE/RTL8676xx"
           RSDK="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+          cd "$SDK"
 
-          # The product arch.mk hardcodes this exact toolchain location.
+          # The SDK expects the toolchain at this hard-coded location.
           sudo mkdir -p /opt/tbs_toolchains/realtek
           sudo ln -sfn "$RSDK" \
             /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
 
-          # Make the compiler available in THIS step and all later steps.
-          export PATH="$RSDK/bin:$PATH"
           echo "$RSDK/bin" >> "$GITHUB_PATH"
 
-          echo "Runner architecture:"
-          uname -m
+          # Git checkout is not an SVN working copy. Keep the old checks harmless.
+          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
+          sed -i 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
 
-          echo "RSDK:"
-          ls -ld "$RSDK" "$RSDK/bin"
+          # The generated kconfig parser files are shipped in the source archive.
+          cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
+          cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
+          cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
-          echo "Compiler:"
-          ls -l "$RSDK/bin/mips-linux-gcc" "$RSDK/bin/rsdk-linux-gcc"
-          command -v mips-linux-gcc
-          command -v rsdk-linux-gcc
-          file "$RSDK/bin/mips-linux-gcc"
-          "$RSDK/bin/mips-linux-gcc" --version
+          # autobuild does not need interactive menuconfig.
+          # Avoid the legacy mconf/ncurses linker problem.
+          sed -i 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
-          echo "Expected hardcoded SDK path:"
-          ls -l /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915/bin/rsdk-linux-gcc
-
-      - name: Enable Universal Repeater
-        shell: bash
-        run: |
-          set -euxo pipefail
+          # Enable the two RTL8192CD features needed for Universal Repeater.
           CFG="$GITHUB_WORKSPACE/customer/product/DSL2750U/defconfig"
-
           sed -i \
             's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' \
             "$CFG"
-
           sed -i \
             's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' \
             "$CFG"
 
+          echo "=== CONFIG ==="
           grep -E \
             'CONFIG_RTL8192CD=|CONFIG_RTL_CLIENT_MODE_SUPPORT=|CONFIG_RTL_REPEATER_MODE_SUPPORT=|CONFIG_RTL_VAP_SUPPORT=' \
             "$CFG"
 
-      - name: Build DSL2750U
+          echo "=== TOOLCHAIN ==="
+          ls -l "$RSDK/bin/rsdk-linux-gcc"
+          "$RSDK/bin/rsdk-linux-gcc" --version || true
+
+      - name: Build
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
           export PATH="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915/bin:$PATH"
           cd "$GITHUB_WORKSPACE/RTL8676xx"
           make autobuild AUTOPRODUCT=DSL2750U V=1
 
-      - name: Verify image
+      - name: Verify output
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
           find "$GITHUB_WORKSPACE/RTL8676xx/build" -maxdepth 5 -type f \
-            \( -name 'image.img' -o -name 'image.bin' \) -print
+            \( -name image.img -o -name image.bin \) -print
           test -f "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
           ls -lh "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
           file "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
 
-      - name: Upload build artifact
+      - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: dsl2750u-repeater-build
-          path: |
-            RTL8676xx/build/romfs/image.img
-            RTL8676xx/build/romfs/image.bin
-          if-no-files-found: warn
+          path: RTL8676xx/build/romfs/image.img
