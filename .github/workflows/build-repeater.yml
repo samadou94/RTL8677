@@ -1,3 +1,4 @@
+
 name: Build DSL2750U Repeater
 
 on:
@@ -14,7 +15,9 @@ jobs:
       - name: Install host dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential flex bison gperf subversion ncurses-dev libncurses5-dev
+          sudo apt-get install -y \
+            build-essential flex bison gperf subversion \
+            ncurses-dev libncurses5-dev
 
       - name: Prepare legacy SDK
         shell: bash
@@ -27,48 +30,40 @@ jobs:
 
           cd "$SDK"
 
-          # Normalize old CRLF files before modifying them.
-          perl -pi -e 's/\r$//' Makefile tools/mkbuilddir tools/prepareBLP.sh scripts/Makefile
+          # Normalize legacy files.
+          perl -pi -e 's/\r$//' \
+            Makefile tools/mkbuilddir tools/prepareBLP.sh scripts/Makefile
 
-          # These legacy scripts use Bash "source" but are invoked by /bin/sh.
-          perl -pi -e 's/^source /. /' tools/mkbuilddir tools/prepareBLP.sh
+          # Fix Bash-only source statements in scripts invoked by /bin/sh.
+          perl -pi -e 's/^source /. /' \
+            tools/mkbuilddir tools/prepareBLP.sh
 
-          # GitHub checkout is not an SVN working copy. The warning is harmless,
-          # but remove the exact SVN status command used by ckconfig.
+          # Skip SVN status command: GitHub checkout is not an SVN working copy.
           perl -pi -e 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
 
-          # Fix the old /bin/sh test syntax.
+          # Fix legacy shell test syntax.
           perl -pi -e 's/\[ -a \.config \]/[ -e .config ]/g' Makefile
 
-          # The vendor permission test is incompatible with the GitHub runner.
-          # Neutralize the target itself, then remove it as a tools prerequisite.
+          # Neutralize the obsolete SUID permission check.
           sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
           sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
           sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
 
-          # Verify the exact Makefile that autobuild will use.
-          echo '=== PERMISSION/TOOLS TARGETS ==='
-          sed -n '/^promission_check:/,/^tools:/p' Makefile
-          grep -Eq '^promission_check:' Makefile
-          grep -Eq '^tools:[[:space:]]*$' Makefile
-          ! grep -Eq '^[[:space:]]*tools:[[:space:]]+promission_check[[:space:]]*$' Makefile
-
-          # The legacy SquashFS 4.1 source collides with modern glibc's major()/minor()
-          # macros. Rename only the local variables first; then add sysmacros so makedev()
-          # is declared. The line ranges match the unmodified source in this archive.
+          # Fix SquashFS 4.1 for modern glibc.
           SQFS="tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c"
+          test -f "$SQFS"
+
           perl -pi -e 'if ($. >= 1356 && $. <= 1374) { s/\bmajor\b(?!\s*\()/major_num/g; s/\bminor\b(?!\s*\()/minor_num/g }' "$SQFS"
           perl -pi -e 'if ($. >= 1380 && $. <= 1398) { s/\bmajor\b(?!\s*\()/major_num/g; s/\bminor\b(?!\s*\()/minor_num/g }' "$SQFS"
+
           if ! grep -q '^#include <sys/sysmacros.h>$' "$SQFS"; then
             perl -0pi -e 's/(#include <sys\/types\.h>\r?\n)/$1#include <sys\/sysmacros.h>\n/' "$SQFS"
           fi
-          rm -f "${SQFS%.c}.o"
 
-          # autobuild needs scripts/conf, not interactive mconf.
+          # Ensure the host tools are rebuilt for this runner.
+          rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
-          # The archive contains prebuilt 32-bit host objects. Delete those
-          # objects/binaries so the Ubuntu runner rebuilds host tools natively.
           find tools/src -type f \
             \( -name '*.o' \
             -o -name 'mkimage_ex' \
@@ -82,15 +77,118 @@ jobs:
             -o -name 'xml_flash_tool' \) \
             -delete
 
-          # The Kconfig parser sources are shipped in the archive.
+          # Restore shipped Kconfig parser sources.
           cp -f scripts/lex.zconf.c_shipped scripts/lex.zconf.c
           cp -f scripts/zconf.tab.c_shipped scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
-          # The SDK expects this exact bundled toolchain path.
+          # Set up the vendor toolchain path.
+          test -d "$RSDK/bin"
           sudo mkdir -p /opt/tbs_toolchains/realtek
           sudo ln -sfn "$RSDK" \
             /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
 
           export PATH="$RSDK/bin:$PATH"
           echo "$RSDK/bin" >> "$GITHUB_PATH"
+
+          # Enable RTL8192CD client and repeater support.
+          CFG="$ROOT/customer/product/DSL2750U/defconfig"
+          test -f "$CFG"
+
+          for option in CONFIG_RTL_CLIENT_MODE_SUPPORT CONFIG_RTL_REPEATER_MODE_SUPPORT; do
+            if grep -q "^# $option is not set$" "$CFG"; then
+              sed -i "s/^# $option is not set$/$option=y/" "$CFG"
+            elif ! grep -q "^$option=y$" "$CFG"; then
+              printf '\n%s=y\n' "$option" >> "$CFG"
+            fi
+          done
+
+          # Validate the expected configuration and patches.
+          grep -Eq '^tools:[[:space:]]*$' Makefile
+          grep -q 'unsigned int major_num = major(buf->st_rdev);' "$SQFS"
+          grep -q 'unsigned int minor_num = minor(buf->st_rdev);' "$SQFS"
+          ! grep -q 'unsigned int major = major(buf->st_rdev);' "$SQFS"
+          ! grep -q 'unsigned int minor = minor(buf->st_rdev);' "$SQFS"
+          grep -q '#include <sys/sysmacros.h>' "$SQFS"
+
+          grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
+          grep -q '^CONFIG_RTL_VAP_SUPPORT=y$' "$CFG"
+          grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG"
+          grep -q '^CONFIG_RTL_REPEATER_MODE_SUPPORT=y$' "$CFG"
+          grep -q '^TBS_KERNEL_VERSION=linux-2.6.30.9$' \
+            "$ROOT/customer/product/DSL2750U/arch.mk"
+
+          echo "=== VERIFIED PREPARATION ==="
+          grep -n '^promission_check:' Makefile
+          grep -n '^tools:' Makefile
+          grep -E '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' "$CFG"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/RTL8676xx"
+          RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+
+          export PATH="$RSDK/bin:$PATH"
+          cd "$SDK"
+
+          # Generate the product configuration.
+          make autoprepare AUTOPRODUCT=DSL2750U V=1
+
+          # autoprepare may regenerate the Makefile; patch it again.
+          sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
+          sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
+          sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
+
+          echo "=== POST-AUTOPREPARE TARGET CHECK ==="
+          sed -n '/^promission_check:/,/^tools:/p' Makefile
+          grep -Eq '^tools:[[:space:]]*$' Makefile
+
+          # Compile host tools, kernel subdirectories, and firmware filesystems.
+          make tools V=1
+          make subdirs rootfs romfs V=1
+
+          echo "=== BUILD OUTPUT CANDIDATES ==="
+          find "$SDK" -type f \
+            \( -name '*.img' -o -name '*.bin' \) \
+            -size +0c -print
+
+      - name: Verify firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/RTL8676xx"
+          OUT="$GITHUB_WORKSPACE/artifacts"
+
+          # Locate the generated image by filename.
+          mapfile -t IMAGES < <(
+            find "$SDK/build" -type f -name 'image.img' -size +0c 2>/dev/null
+          )
+
+          if [ "${#IMAGES[@]}" -ne 1 ]; then
+            echo "Expected exactly one non-empty image.img; found ${#IMAGES[@]}"
+            echo "Available image/bin files:"
+            find "$SDK" -type f \
+              \( -name '*.img' -o -name '*.bin' \) \
+              -size +0c -print
+            exit 1
+          fi
+
+          mkdir -p "$OUT"
+          cp "${IMAGES[0]}" "$OUT/image.img"
+
+          echo "=== FIRMWARE FILE ==="
+          ls -lh "$OUT/image.img"
+          file "$OUT/image.img"
+          sha256sum "$OUT/image.img"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsl2750u-universal-repeater
+          path: artifacts/image.img
+          if-no-files-found: error
