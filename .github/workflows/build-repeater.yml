@@ -41,9 +41,13 @@ jobs:
           perl -pi -e 's/\[ -a \.config \]/[ -e .config ]/g' Makefile
 
           # Remove the obsolete SUID prerequisite from the tools target.
-          # The original Makefile is CRLF and old makefiles sometimes contain
-          # trailing whitespace, so match the dependency rather than one exact byte string.
-          sed -i -E 's/^(tools:[[:space:]]*)promission_check([[:space:]]*)$/\1\2/' Makefile
+          # Replace the entire target declaration, regardless of whitespace.
+          sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
+
+          # Verify the exact Makefile that autobuild will use.
+          echo '=== TOOLS TARGET ==='
+          grep -n -A2 -B1 '^tools:' Makefile
+          ! grep -Eq '^[[:space:]]*tools:[[:space:]]+promission_check[[:space:]]*$' Makefile
 
           # The legacy SquashFS 4.1 source collides with modern glibc's major()/minor()
           # macros. Rename only the local variables first; then add sysmacros so makedev()
@@ -89,8 +93,3 @@ jobs:
 
           # Enable the existing RTL8192CD client + Universal Repeater code.
           CFG="$ROOT/customer/product/DSL2750U/defconfig"
-
-          if grep -q '^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$' "$CFG"; then
-            perl -pi -e 's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' "$CFG"
-          elif ! grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG"; then
-            printf '\nCONFIG_RTL_CLIENT_MODE_SUPPORT=y\n' >> "$CFG"
