@@ -51,6 +51,8 @@ jobs:
 
           # Old test syntax compatibility.
           sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
+          # prepareBLP.sh is invoked by /bin/sh but uses bash's 'source'.
+          sed -i 's/^source /./' tools/prepareBLP.sh
 
           # Kconfig parser files are shipped in the archive.
           cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
