@@ -40,13 +40,17 @@ jobs:
           # Fix the old /bin/sh test syntax.
           perl -pi -e 's/\[ -a \.config \]/[ -e .config ]/g' Makefile
 
-          # Remove the obsolete SUID prerequisite from the tools target.
-          # Replace the entire target declaration, regardless of whitespace.
+          # The vendor permission test is incompatible with the GitHub runner.
+          # Neutralize the target itself, then remove it as a tools prerequisite.
+          sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
+          sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
           sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
 
           # Verify the exact Makefile that autobuild will use.
-          echo '=== TOOLS TARGET ==='
-          grep -n -A2 -B1 '^tools:' Makefile
+          echo '=== PERMISSION/TOOLS TARGETS ==='
+          sed -n '/^promission_check:/,/^tools:/p' Makefile
+          grep -Eq '^promission_check:' Makefile
+          grep -Eq '^tools:[[:space:]]*$' Makefile
           ! grep -Eq '^[[:space:]]*tools:[[:space:]]+promission_check[[:space:]]*$' Makefile
 
           # The legacy SquashFS 4.1 source collides with modern glibc's major()/minor()
@@ -90,6 +94,3 @@ jobs:
 
           export PATH="$RSDK/bin:$PATH"
           echo "$RSDK/bin" >> "$GITHUB_PATH"
-
-          # Enable the existing RTL8192CD client + Universal Repeater code.
-          CFG="$ROOT/customer/product/DSL2750U/defconfig"
