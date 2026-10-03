@@ -27,43 +27,25 @@ jobs:
             libgcc-s1:i386 \
             zlib1g:i386
 
-      - name: Prepare legacy Realtek SDK
+            - name: Prepare legacy SDK
         shell: bash
         run: |
           set -euxo pipefail
+          cd "$GITHUB_WORKSPACE/RTL8676xx"
 
-          ROOT="$GITHUB_WORKSPACE"
-          SDK="$ROOT/RTL8676xx"
-          RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
-
-          cd "$SDK"
-
-          # The original mkbuilddir is written for bash, but the top Makefile
-          # invokes it explicitly through "sh". Invoke it with bash instead.
-          sed -i \
-            's#@sh \$(ROOTDIR)/tools/mkbuilddir \$(AUTOPRODUCT)#@bash \$(ROOTDIR)/tools/mkbuilddir \$(AUTOPRODUCT)#' \
-            Makefile
-
-          # Avoid SVN "not a working copy" noise from BaseVar.mk.
-          sed -i \
-            's#TBS_VERSION := \$(word 2, \$(shell LANG=C svn info \$(ROOTDIR)| grep Revision))#TBS_VERSION := 0#' \
-            BaseVar.mk
-
-          # Old test syntax compatibility.
-          sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
-          # prepareBLP.sh is invoked by /bin/sh but uses bash's 'source'.
+          sed -i 's/^source /. /' tools/mkbuilddir
           sed -i 's/^source /. /' tools/prepareBLP.sh
-          # GitHub Actions cannot satisfy the SDK's obsolete SUID/mknod check.
-          sed -i 's/^tools: promission_check$/tools:/' Makefile
 
-          # Kconfig parser files are shipped in the archive.
-          cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
-          cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
+          sed -i '171,177c\promission_check:\n\ntools:' Makefile
+
+          cp -f scripts/lex.zconf.c_shipped scripts/lex.zconf.c
+          cp -f scripts/zconf.tab.c_shipped scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
-          # autobuild does not need interactive menuconfig/mconf.
           sed -i 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
+          # ...the rest of your existing Prepare SDK commands...
+          
           # The bundled compiler is old and the SDK expects these exact names.
           # Verify both the real compiler and its rsdk-linux-* symlink.
           chmod -R a+rx "$RSDK/bin"
