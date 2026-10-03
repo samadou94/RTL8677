@@ -11,40 +11,60 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install host tools
+      - name: Install host dependencies
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y build-essential flex bison gperf ncurses-dev subversion
+          sudo apt-get install -y \
+            build-essential \
+            flex \
+            bison \
+            gperf \
+            subversion \
+            ncurses-dev \
+            libncurses5-dev \
+            libc6-i386 \
+            libgcc-s1:i386 \
+            zlib1g:i386
 
-      - name: Prepare SDK
+      - name: Prepare legacy Realtek SDK
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
-          SDK="$GITHUB_WORKSPACE/RTL8676xx"
-          RSDK="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/RTL8676xx"
+          RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
 
           cd "$SDK"
 
-          # This legacy script is always invoked through /bin/sh.
-          # Replace Bash-only "source" with POSIX "." so arch.mk is loaded.
-          sed -i 's/^source /./' tools/mkbuilddir
+          # The original mkbuilddir is written for bash, but the top Makefile
+          # invokes it explicitly through "sh". Invoke it with bash instead.
+          sed -i \
+            's#@sh \$(ROOTDIR)/tools/mkbuilddir \$(AUTOPRODUCT)#@bash \$(ROOTDIR)/tools/mkbuilddir \$(AUTOPRODUCT)#' \
+            Makefile
 
-          # Git checkout is not an SVN working copy.
-          sed -i 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
+          # Avoid SVN "not a working copy" noise from BaseVar.mk.
+          sed -i \
+            's#TBS_VERSION := \$(word 2, \$(shell LANG=C svn info \$(ROOTDIR)| grep Revision))#TBS_VERSION := 0#' \
+            BaseVar.mk
 
-          # Fix old non-POSIX test syntax in the top Makefile.
+          # Old test syntax compatibility.
           sed -i 's/\[ -a \.config \]/[ -e .config ]/' Makefile
 
-          # Use the shipped Kconfig parser sources.
+          # Kconfig parser files are shipped in the archive.
           cp -f scripts/lex.zconf.c_shipped  scripts/lex.zconf.c
           cp -f scripts/zconf.tab.c_shipped  scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
-          # autobuild does not need interactive menuconfig.
+          # autobuild does not need interactive menuconfig/mconf.
           sed -i 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
-          # The SDK hardcodes this toolchain location.
+          # The bundled compiler is old and the SDK expects these exact names.
+          # Verify both the real compiler and its rsdk-linux-* symlink.
+          chmod -R a+rx "$RSDK/bin"
+
+          # The vendor arch.mk hardcodes this location.
           sudo mkdir -p /opt/tbs_toolchains/realtek
           sudo ln -sfn "$RSDK" \
             /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
@@ -52,29 +72,36 @@ jobs:
           echo "$RSDK/bin" >> "$GITHUB_PATH"
           export PATH="$RSDK/bin:$PATH"
 
-          # Enable RTL8192CD client + Universal Repeater.
-          CFG="$GITHUB_WORKSPACE/customer/product/DSL2750U/defconfig"
+          command -v rsdk-linux-gcc
+          command -v mips-linux-gcc
+          file "$RSDK/bin/rsdk-linux-gcc"
+          file "$RSDK/bin/mips-linux-gcc"
 
-          sed -i \
-            's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' \
-            "$CFG"
+          # Enable the existing RTL8192CD client + Universal Repeater code.
+          CFG="$ROOT/customer/product/DSL2750U/defconfig"
 
-          sed -i \
-            's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' \
-            "$CFG"
+          grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
 
-          echo "=== CONFIG ==="
+          grep -q '^CONFIG_RTL_VAP_SUPPORT=y$' "$CFG"
+
+          grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG" || \
+            printf '\nCONFIG_RTL_CLIENT_MODE_SUPPORT=y\n' >> "$CFG"
+
+          grep -q '^CONFIG_RTL_REPEATER_MODE_SUPPORT=y$' "$CFG" || \
+            printf 'CONFIG_RTL_REPEATER_MODE_SUPPORT=y\n' >> "$CFG"
+
+          echo '=== FINAL REPEATER CONFIG ==='
           grep -E \
-            'CONFIG_RTL8192CD=|CONFIG_RTL_CLIENT_MODE_SUPPORT=|CONFIG_RTL_REPEATER_MODE_SUPPORT=|CONFIG_RTL_VAP_SUPPORT=' \
+            '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' \
             "$CFG"
 
-          echo "=== TOOLCHAIN ==="
-          find "$RSDK/bin" -maxdepth 1 -type f -name 'rsdk-linux-*' -print | head -20
+          echo '=== KERNEL VERSION ==='
+          grep '^TBS_KERNEL_VERSION=' "$ROOT/customer/product/DSL2750U/arch.mk"
 
       - name: Build
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           export PATH="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915/bin:$PATH"
           cd "$GITHUB_WORKSPACE/RTL8676xx"
           make autobuild AUTOPRODUCT=DSL2750U V=1
@@ -82,9 +109,9 @@ jobs:
       - name: Verify image
         shell: bash
         run: |
-          set -eux
-          find "$GITHUB_WORKSPACE/RTL8676xx/build" -maxdepth 5 -type f \
-            \( -name image.img -o -name image.bin \) -print
+          set -euxo pipefail
+          find "$GITHUB_WORKSPACE/RTL8676xx/build" -maxdepth 6 -type f \
+            \( -name 'image.img' -o -name 'image.bin' \) -print
           test -f "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
           ls -lh "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
           file "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
