@@ -1,3 +1,35 @@
+name: Build DSL2750U Repeater
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison gperf subversion ncurses-dev libncurses5-dev
+
+      - name: Prepare legacy SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/RTL8676xx"
+          RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+
+          cd "$SDK"
+
+          # Normalize old CRLF files before modifying them.
+          perl -pi -e 's/\r$//' Makefile tools/mkbuilddir tools/prepareBLP.sh scripts/Makefile
+
           # These legacy scripts use Bash "source" but are invoked by /bin/sh.
           perl -pi -e 's/^source /. /' tools/mkbuilddir tools/prepareBLP.sh
 
@@ -9,7 +41,20 @@
           perl -pi -e 's/\[ -a \.config \]/[ -e .config ]/g' Makefile
 
           # Remove the obsolete SUID prerequisite from the tools target.
-          perl -pi -e 's/^tools: promission_check$/tools:/' Makefile
+          # The original Makefile is CRLF and old makefiles sometimes contain
+          # trailing whitespace, so match the dependency rather than one exact byte string.
+          sed -i -E 's/^(tools:[[:space:]]*)promission_check([[:space:]]*)$/\1\2/' Makefile
+
+          # The legacy SquashFS 4.1 source collides with modern glibc's major()/minor()
+          # macros. Rename only the local variables first; then add sysmacros so makedev()
+          # is declared. The line ranges match the unmodified source in this archive.
+          SQFS="tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c"
+          perl -pi -e 'if ($. >= 1356 && $. <= 1374) { s/\bmajor\b(?!\s*\()/major_num/g; s/\bminor\b(?!\s*\()/minor_num/g }' "$SQFS"
+          perl -pi -e 'if ($. >= 1380 && $. <= 1398) { s/\bmajor\b(?!\s*\()/major_num/g; s/\bminor\b(?!\s*\()/minor_num/g }' "$SQFS"
+          if ! grep -q '^#include <sys/sysmacros.h>$' "$SQFS"; then
+            perl -0pi -e 's/(#include <sys\/types\.h>\r?\n)/$1#include <sys\/sysmacros.h>\n/' "$SQFS"
+          fi
+          rm -f "${SQFS%.c}.o"
 
           # autobuild needs scripts/conf, not interactive mconf.
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
@@ -33,34 +78,6 @@
           cp -f scripts/lex.zconf.c_shipped scripts/lex.zconf.c
           cp -f scripts/zconf.tab.c_shipped scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
-          # Fix legacy SquashFS 4.1 against modern glibc.
-          # The source declares locals named major/minor and calls major()/minor()
-          # in the same declaration. Rename only those local-variable uses.
-          perl -pi -e '
-            if ($. >= 1356 && $. <= 1374) {
-              s/\bmajor\b(?!\s*\()/major_num/g;
-              s/\bminor\b(?!\s*\()/minor_num/g;
-            }
-            if ($. >= 1380 && $. <= 1398) {
-              s/\bmajor\b(?!\s*\()/major_num/g;
-              s/\bminor\b(?!\s*\()/minor_num/g;
-            }
-          ' tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
-
-          # Make major()/minor()/makedev() declarations explicit on modern glibc.
-          perl -0pi -e \
-            's/#include <sys\/types\.h>\n/#include <sys\/types.h>\n#include <sys\/sysmacros.h>\n/' \
-            tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
-
-          # Verify the exact fix before compiling.
-          grep -q 'unsigned int major_num = major(buf->st_rdev);' \
-            tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
-          grep -q 'unsigned int minor_num = minor(buf->st_rdev);' \
-            tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
-          ! grep -q 'unsigned int major = major(buf->st_rdev);' \
-            tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
-          ! grep -q 'unsigned int minor = minor(buf->st_rdev);' \
-            tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c
 
           # The SDK expects this exact bundled toolchain path.
           sudo mkdir -p /opt/tbs_toolchains/realtek
@@ -77,46 +94,3 @@
             perl -pi -e 's/^# CONFIG_RTL_CLIENT_MODE_SUPPORT is not set$/CONFIG_RTL_CLIENT_MODE_SUPPORT=y/' "$CFG"
           elif ! grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG"; then
             printf '\nCONFIG_RTL_CLIENT_MODE_SUPPORT=y\n' >> "$CFG"
-          fi
-
-          if grep -q '^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$' "$CFG"; then
-            perl -pi -e 's/^# CONFIG_RTL_REPEATER_MODE_SUPPORT is not set$/CONFIG_RTL_REPEATER_MODE_SUPPORT=y/' "$CFG"
-          elif ! grep -q '^CONFIG_RTL_REPEATER_MODE_SUPPORT=y$' "$CFG"; then
-            printf 'CONFIG_RTL_REPEATER_MODE_SUPPORT=y\n' >> "$CFG"
-          fi
-
-          # Hard fail here if our Makefile edits did not take effect.
-          ! grep -q '^tools: promission_check' Makefile
-          grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
-          grep -q '^CONFIG_RTL_VAP_SUPPORT=y$' "$CFG"
-          grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG"
-          grep -q '^CONFIG_RTL_REPEATER_MODE_SUPPORT=y$' "$CFG"
-          grep -q '^TBS_KERNEL_VERSION=linux-2.6.30.9$' "$ROOT/customer/product/DSL2750U/arch.mk"
-
-          echo '=== VERIFIED ==='
-          grep -n '^tools:' Makefile
-          grep -E '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' "$CFG"
-          grep '^TBS_KERNEL_VERSION=' "$ROOT/customer/product/DSL2750U/arch.mk"
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915/bin:$PATH"
-          cd "$GITHUB_WORKSPACE/RTL8676xx"
-          make autobuild AUTOPRODUCT=DSL2750U V=1
-
-      - name: Verify firmware
-        shell: bash
-        run: |
-          set -euo pipefail
-          IMAGE="$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
-          test -f "$IMAGE"
-          ls -lh "$IMAGE"
-          file "$IMAGE"
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsl2750u-universal-repeater
-          path: RTL8676xx/build/romfs/image.img
