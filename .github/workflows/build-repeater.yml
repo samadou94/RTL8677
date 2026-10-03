@@ -20,54 +20,62 @@ jobs:
             flex \
             bison \
             gperf \
-            subversion \
             ncurses-dev \
             libncurses5-dev \
             libc6-i386 \
             libgcc-s1:i386 \
             zlib1g:i386
 
-            - name: Prepare legacy SDK
+      - name: Prepare legacy Realtek SDK
         shell: bash
         run: |
-          set -euxo pipefail
-          cd "$GITHUB_WORKSPACE/RTL8676xx"
+          set -euo pipefail
 
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/RTL8676xx"
+          RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
+
+          cd "$SDK"
+
+          # Normalize legacy CRLF Makefiles before editing them.
+          sed -i 's/\r$//' Makefile
+          sed -i 's/\r$//' tools/mkbuilddir
+          sed -i 's/\r$//' tools/prepareBLP.sh
+          sed -i 's/\r$//' scripts/Makefile
+
+          # Legacy scripts are invoked with /bin/sh but use bash's "source".
           sed -i 's/^source /. /' tools/mkbuilddir
           sed -i 's/^source /. /' tools/prepareBLP.sh
 
-          sed -i '171,177c\promission_check:\n\ntools:' Makefile
+          # GitHub checkout is not an SVN working copy.
+          sed -i 's/^[[:space:]]*SVNST=`svn st \$\$defconfig`;/\tSVNST=;/' Makefile
 
+          # autobuild does not need the obsolete SUID/mknod permission check.
+          # Remove it from the "tools" prerequisite instead of modifying
+          # the check recipe itself.
+          grep -q '^tools: promission_check$' Makefile
+          sed -i 's/^tools: promission_check$/tools:/' Makefile
+
+          # Kconfig parser sources are shipped in the archive.
           cp -f scripts/lex.zconf.c_shipped scripts/lex.zconf.c
           cp -f scripts/zconf.tab.c_shipped scripts/zconf.tab.c
           cp -f scripts/zconf.hash.c_shipped scripts/zconf.hash.c
 
+          # autobuild only needs scripts/conf, not interactive mconf.
           sed -i 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
 
-          # ...the rest of your existing Prepare SDK commands...
-          
-          # The bundled compiler is old and the SDK expects these exact names.
-          # Verify both the real compiler and its rsdk-linux-* symlink.
-          chmod -R a+rx "$RSDK/bin"
-
-          # The vendor arch.mk hardcodes this location.
+          # The SDK hardcodes this toolchain location in arch.mk.
           sudo mkdir -p /opt/tbs_toolchains/realtek
           sudo ln -sfn "$RSDK" \
             /opt/tbs_toolchains/realtek/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915
 
-          echo "$RSDK/bin" >> "$GITHUB_PATH"
           export PATH="$RSDK/bin:$PATH"
+          echo "$RSDK/bin" >> "$GITHUB_PATH"
 
-          command -v rsdk-linux-gcc
-          command -v mips-linux-gcc
-          file "$RSDK/bin/rsdk-linux-gcc"
-          file "$RSDK/bin/mips-linux-gcc"
-
-          # Enable the existing RTL8192CD client + Universal Repeater code.
+          # Enable RTL8192CD client + Universal Repeater.
           CFG="$ROOT/customer/product/DSL2750U/defconfig"
 
           grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
-
           grep -q '^CONFIG_RTL_VAP_SUPPORT=y$' "$CFG"
 
           grep -q '^CONFIG_RTL_CLIENT_MODE_SUPPORT=y$' "$CFG" || \
@@ -76,37 +84,45 @@ jobs:
           grep -q '^CONFIG_RTL_REPEATER_MODE_SUPPORT=y$' "$CFG" || \
             printf 'CONFIG_RTL_REPEATER_MODE_SUPPORT=y\n' >> "$CFG"
 
-          echo '=== FINAL REPEATER CONFIG ==='
-          grep -E \
-            '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' \
-            "$CFG"
+          echo '=== FINAL DEFCONFIG ==='
+          grep -E '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' "$CFG"
 
           echo '=== KERNEL VERSION ==='
           grep '^TBS_KERNEL_VERSION=' "$ROOT/customer/product/DSL2750U/arch.mk"
 
-          echo '=== PREPARE BLP ==='
-          sed -n '1,12p' tools/prepareBLP.sh
+          echo '=== TOOLCHAIN ==='
+          test -x "$RSDK/bin/rsdk-linux-gcc"
+          ls -l "$RSDK/bin/rsdk-linux-gcc"
+          file "$RSDK/bin/rsdk-linux-gcc"
 
-      - name: Build
+          echo '=== MAKEFILE CHECK ==='
+          grep -n '^tools:' Makefile
+          grep -n '^promission_check:' Makefile
+
+      - name: Build DSL2750U
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+
           export PATH="$GITHUB_WORKSPACE/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915/bin:$PATH"
+
           cd "$GITHUB_WORKSPACE/RTL8676xx"
+
           make autobuild AUTOPRODUCT=DSL2750U V=1
 
-      - name: Verify image
+      - name: Verify firmware
         shell: bash
         run: |
-          set -euxo pipefail
-          find "$GITHUB_WORKSPACE/RTL8676xx/build" -maxdepth 6 -type f \
-            \( -name 'image.img' -o -name 'image.bin' \) -print
-          test -f "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
-          ls -lh "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
-          file "$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
+          set -euo pipefail
 
-      - name: Upload image
+          IMAGE="$GITHUB_WORKSPACE/RTL8676xx/build/romfs/image.img"
+
+          test -f "$IMAGE"
+          ls -lh "$IMAGE"
+          file "$IMAGE"
+
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: dsl2750u-repeater-build
+          name: dsl2750u-universal-repeater
           path: RTL8676xx/build/romfs/image.img
