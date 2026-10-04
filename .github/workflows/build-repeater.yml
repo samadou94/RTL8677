@@ -436,9 +436,14 @@ jobs:
           # ("mknod: mtd0: Operation not permitted" x281), so the rootfs/romfs
           # stage runs under sudo; everything before it stays unprivileged.
           run_build() {
-            make subdirs V=1
+            # Never leave root-owned leftovers for the unprivileged stage to trip on.
+            sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+            # NOTE: "|| return 1" is required: set -e is ignored inside a function
+            # that is called from an "if" condition, so without it a failed
+            # "make subdirs" would still run the sudo stage on a half-built tree.
+            make subdirs V=1 || return 1
             sudo -E env "PATH=$PATH" "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" \
-              make rootfs romfs V=1
+              make rootfs romfs V=1 || return 1
           }
 
           make tools V=1
