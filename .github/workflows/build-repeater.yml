@@ -192,6 +192,15 @@ jobs:
           echo "--- libcrypt in vendor toolchain ---"
           find "$RSDK" -name 'libcrypt*' 2>/dev/null | head || true
 
+          # qrencode's configure needs libpng12 via pkg-config, but libpng is
+          # installed into build/tmpdist (a cross prefix) and the Makefile never
+          # sets PKG_CONFIG_PATH (the vendor's own host had it set globally).
+          QRMK="src/opensource/qrencode/Makefile"
+          test -f "$QRMK"
+          perl -pi -e 's{(?<![\w=])(\./configure\b)}{PKG_CONFIG_PATH='"$SDK"'/build/tmpdist/lib/pkgconfig $1} if !/PKG_CONFIG_PATH=/' "$QRMK"
+          grep -n 'PKG_CONFIG_PATH' "$QRMK"
+          grep -q 'PKG_CONFIG_PATH=' "$QRMK"
+
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
@@ -267,6 +276,13 @@ jobs:
           RSDK="$ROOT/rsdk-1.5.6-5281-EB-2.6.30-0.9.30.3-110915"
 
           export PATH="$RSDK/bin:$PATH"
+
+          # qrencode's configure runs pkg-config for the cross-compiled libpng12.
+          # libpng12 is built earlier in this same Build step and installs its
+          # libpng12.pc into build/tmpdist/lib/pkgconfig. Export PKG_CONFIG_PATH
+          # for the entire step so qrencode can find it when its configure runs.
+          export PKG_CONFIG_PATH="$SDK/build/tmpdist/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
           cd "$SDK"
 
           # Generate the product configuration.
