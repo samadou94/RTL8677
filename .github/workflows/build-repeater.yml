@@ -1,12 +1,14 @@
-
-name: Build DSL2750U Repeater
+name: Build RTL8677 repeater firmware
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -24,8 +26,8 @@ jobs:
             ncurses-dev \
             libncurses5-dev \
             libattr1-dev
+
       - name: Prepare legacy SDK
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -39,9 +41,14 @@ jobs:
           perl -pi -e 's/\r$//' \
             Makefile tools/mkbuilddir tools/prepareBLP.sh scripts/Makefile
 
-          # Fix Bash-only source statements in scripts invoked by /bin/sh.
+          # Fix Bash-only syntax in scripts that get run by /bin/sh (dash).
           perl -pi -e 's/^source /. /' \
             tools/mkbuilddir tools/prepareBLP.sh
+          # "function foo" -> "foo()"  (fixes: mkbuilddir: 9: function: not found)
+          perl -pi -e 's/^(\s*)function\s+(\w+)\s*(?:\(\s*\))?/$1$2()/' \
+            tools/mkbuilddir tools/prepareBLP.sh
+          # Also make the shebang bash in case they are executed directly.
+          sed -i '1s|^#!.*|#!/bin/bash|' tools/mkbuilddir tools/prepareBLP.sh
 
           # Skip SVN status command: GitHub checkout is not an SVN working copy.
           perl -pi -e 's/SVNST=`svn st \$\$defconfig`;/SVNST=;/' Makefile
@@ -54,8 +61,9 @@ jobs:
           sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
           sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
 
-          # Fix SquashFS 4.1 for modern glibc.
+          # Fix SquashFS 4.1 for modern glibc / GCC.
           SQFS="tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c"
+          SQFS_MK="tools/src/sqlzma/squashfs4.1/squashfs-tools/Makefile"
           test -f "$SQFS"
 
           perl -pi -e 'if ($. >= 1356 && $. <= 1374) { s/\bmajor\b(?!\s*\()/major_num/g; s/\bminor\b(?!\s*\()/minor_num/g }' "$SQFS"
@@ -63,6 +71,15 @@ jobs:
 
           if ! grep -q '^#include <sys/sysmacros.h>$' "$SQFS"; then
             perl -0pi -e 's/(#include <sys\/types\.h>\r?\n)/$1#include <sys\/sysmacros.h>\n/' "$SQFS"
+          fi
+
+          # GCC >= 5 uses C99/C11 inline rules: a non-static "inline" function
+          # emits no symbol -> "undefined reference to `add_dir_entry'".
+          # 1) make add_dir_entry a normal function
+          perl -pi -e 's/^(?:static\s+)?inline\s+(void\s+add_dir_entry\b)/$1/' "$SQFS"
+          # 2) belt and braces: build the tool with old GNU inline semantics
+          if ! grep -q 'fgnu89-inline' "$SQFS_MK"; then
+            sed -i 's/-O2/-O2 -fgnu89-inline/' "$SQFS_MK"
           fi
 
           # Ensure the host tools are rebuilt for this runner.
@@ -115,6 +132,7 @@ jobs:
           ! grep -q 'unsigned int major = major(buf->st_rdev);' "$SQFS"
           ! grep -q 'unsigned int minor = minor(buf->st_rdev);' "$SQFS"
           grep -q '#include <sys/sysmacros.h>' "$SQFS"
+          ! grep -Eq '^\s*(static\s+)?inline\s+void\s+add_dir_entry' "$SQFS"
 
           grep -q '^CONFIG_RTL8192CD=y$' "$CFG"
           grep -q '^CONFIG_RTL_VAP_SUPPORT=y$' "$CFG"
@@ -126,10 +144,10 @@ jobs:
           echo "=== VERIFIED PREPARATION ==="
           grep -n '^promission_check:' Makefile
           grep -n '^tools:' Makefile
-          grep -E '^CONFIG_RTL8192CD=|^CONFIG_RTL_CLIENT_MODE_SUPPORT=|^CONFIG_RTL_REPEATER_MODE_SUPPORT=|^CONFIG_RTL_VAP_SUPPORT=' "$CFG"
+          grep -n 'add_dir_entry' "$SQFS" | head -3
+          grep -n 'fgnu89-inline' "$SQFS_MK" || true
 
       - name: Build
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -156,44 +174,19 @@ jobs:
           make tools V=1
           make subdirs rootfs romfs V=1
 
-          echo "=== BUILD OUTPUT CANDIDATES ==="
-          find "$SDK" -type f \
-            \( -name '*.img' -o -name '*.bin' \) \
-            -size +0c -print
-
-      - name: Verify firmware
-        shell: bash
+      - name: Collect firmware images
+        if: success()
         run: |
-          set -euo pipefail
-
-          SDK="$GITHUB_WORKSPACE/RTL8676xx"
-          OUT="$GITHUB_WORKSPACE/artifacts"
-
-          # Locate the generated image by filename.
-          mapfile -t IMAGES < <(
-            find "$SDK/build" -type f -name 'image.img' -size +0c 2>/dev/null
-          )
-
-          if [ "${#IMAGES[@]}" -ne 1 ]; then
-            echo "Expected exactly one non-empty image.img; found ${#IMAGES[@]}"
-            echo "Available image/bin files:"
-            find "$SDK" -type f \
-              \( -name '*.img' -o -name '*.bin' \) \
-              -size +0c -print
-            exit 1
-          fi
-
-          mkdir -p "$OUT"
-          cp "${IMAGES[0]}" "$OUT/image.img"
-
-          echo "=== FIRMWARE FILE ==="
-          ls -lh "$OUT/image.img"
-          file "$OUT/image.img"
-          sha256sum "$OUT/image.img"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          find "$GITHUB_WORKSPACE/RTL8676xx" \
+            \( -name '*.img' -o -name '*.bin' -o -name '*.image' -o -name 'vmlinux*' -o -name '*.squashfs' \) \
+            -newer "$GITHUB_WORKSPACE/RTL8676xx/Makefile" \
+            -exec cp -v --parents {} "$GITHUB_WORKSPACE/out/" \; || true
 
       - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: dsl2750u-universal-repeater
-          path: artifacts/image.img
-          if-no-files-found: error
+          name: rtl8677-repeater-firmware
+          path: out/
+          if-no-files-found: warn
