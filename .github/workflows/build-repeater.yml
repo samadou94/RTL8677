@@ -334,18 +334,23 @@ jobs:
           test -f "$LIBUSB_ROOT/error.c"
           test -f "$LIBUSB_ROOT/descriptors.c"
 
-          # Keep the vendor-generated Autotools metadata intact. In particular,
-          # Makefile.in must be newer than aclocal.m4; otherwise the generated
-          # Makefile tries to rebuild Makefile.in via the vendor's old
-          # /home/dslpl3/.../missing --run automake-1.8 command.
-          #
-          # Touch aclocal.m4 first, then Makefile.in last, so Make sees
-          # Makefile.in as up-to-date and does not invoke that stale helper.
+          # The generated Makefile contains absolute references to the old vendor
+          # "missing" helper. Even after configure --recheck succeeds, GNU make
+          # can invoke that helper from the "configure" target:
+          #   /home/dslpl3/tangqiang/.../libusb-0.1.12/missing --run autoconf
+          # Replace those stale helper invocations with a successful no-op.
+          sed -i -E \
+            's#/[[:alnum:]_./-]+/missing[[:space:]]+--run#/bin/true --run#g' \
+            "$LIBUSB_ROOT/Makefile"
+
+          # Keep the generated Autotools metadata self-consistent.
+          # Touch aclocal.m4 first and Makefile.in last so Make does not consider
+          # Makefile.in older than aclocal.m4.
           touch "$LIBUSB_ROOT/aclocal.m4"
           touch "$LIBUSB_ROOT/Makefile.in"
 
-          # Remove stale vendor-host Autotools commands as a safeguard if make
-          # still decides to refresh generated metadata.
+          # Remove stale vendor-host Autotools command variables as another
+          # safeguard against accidental regeneration.
           sed -i -E \
             -e 's#^ACLOCAL[[:space:]]*=.*$#ACLOCAL = :#' \
             -e 's#^AUTOMAKE[[:space:]]*=.*$#AUTOMAKE = :#' \
@@ -354,8 +359,8 @@ jobs:
             "$LIBUSB_ROOT/Makefile"
 
           echo "=== LIBUSB AUTOTOOLS CHECK ==="
-          grep -nE '^(ACLOCAL|AUTOMAKE|AUTOCONF|AUTOHEADER)[[:space:]]*=' \
-            "$LIBUSB_ROOT/Makefile"
+          grep -nE 'missing --run|^(ACLOCAL|AUTOMAKE|AUTOCONF|AUTOHEADER)[[:space:]]*=' \
+            "$LIBUSB_ROOT/Makefile" || true
           stat "$LIBUSB_ROOT/aclocal.m4" "$LIBUSB_ROOT/Makefile.in"
           test "$LIBUSB_ROOT/Makefile.in" -nt "$LIBUSB_ROOT/aclocal.m4"
 
