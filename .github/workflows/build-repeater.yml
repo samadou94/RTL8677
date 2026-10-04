@@ -364,6 +364,34 @@ jobs:
           stat "$LIBUSB_ROOT/aclocal.m4" "$LIBUSB_ROOT/Makefile.in"
           test "$LIBUSB_ROOT/Makefile.in" -nt "$LIBUSB_ROOT/aclocal.m4"
 
+          # libusb: even with Makefile patched, "make" regenerated it from
+          # Makefile.in via config.status (because Makefile.in was touched newer),
+          # and config.status still bakes in the vendor host's absolute
+          #   ${SHELL} /home/dslpl3/.../libusb-0.1.12/missing --run autoconf
+          # -> "missing: No such file or directory", Makefile:339 Error 127.
+          # 1) neutralise that helper wherever it is baked in,
+          # 2) give every generated file a consistent, ordered timestamp so make
+          #    never decides to regenerate configure/Makefile.in/config.status.
+          (
+            cd "$LIBUSB_ROOT"
+            for f in config.status Makefile Makefile.in configure; do
+              if [ -f "$f" ]; then
+                sed -i -E 's#(\$\{SHELL\}|/bin/sh|sh) [^ ,;]*/missing --run [A-Za-z0-9._-]+#:#g' "$f"
+              fi
+            done
+            base=$(( $(date +%s) - 30 ))
+            i=0
+            for f in aclocal.m4 configure Makefile.in config.h.in config.status Makefile config.h stamp-h1; do
+              if [ -e "$f" ]; then
+                touch -d "@$(( base + i ))" "$f"
+                i=$(( i + 1 ))
+              fi
+            done
+            echo "=== LIBUSB STALE HELPER CHECK ==="
+            grep -nE '/missing --run' config.status Makefile Makefile.in configure 2>/dev/null || echo "no stale missing helper left"
+            ls -l --time-style=full-iso aclocal.m4 configure Makefile.in config.status Makefile 2>/dev/null || true
+          )
+
           # Re-run the mixed-rule fix on any copies created under the build tree.
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
             -exec python3 /tmp/fix_mixed_rules.py {} \; 2>/dev/null | grep -v ' split 0 ' || true
