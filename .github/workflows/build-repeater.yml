@@ -84,6 +84,16 @@ jobs:
             sed -i 's|-O2|-O2 -fgnu89-inline -include sys/sysmacros.h|' "$SQFS_MK"
           fi
 
+          # Host expat (used by xmltool) is configured while the vendor
+          # cross-toolchain env (AR/RANLIB/LD/NM/STRIP=rsdk-linux-*) is active,
+          # so libexpat.a gets no index -> "archive has no index; run ranlib".
+          # Force native binutils for that configure run.
+          XMLMK="tools/src/mkxml/Makefile"
+          test -f "$XMLMK"
+          perl -pi -e 's{(?<![\w=])(\./configure\b)}{AR=ar RANLIB=ranlib LD=ld NM=nm STRIP=strip CC=gcc $1}' "$XMLMK"
+          rm -rf tools/src/mkxml/xmlparser
+          grep -q 'RANLIB=ranlib' "$XMLMK"
+
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
@@ -148,6 +158,7 @@ jobs:
           grep -n '^tools:' Makefile
           grep -n 'add_dir_entry' "$SQFS" | head -3
           grep -n 'sysmacros' "$SQFS_MK" || true
+          grep -n 'RANLIB=ranlib' "$XMLMK"
 
       - name: Build
         run: |
