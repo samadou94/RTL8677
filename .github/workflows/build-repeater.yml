@@ -77,9 +77,11 @@ jobs:
           # emits no symbol -> "undefined reference to `add_dir_entry'".
           # 1) make add_dir_entry a normal function
           perl -pi -e 's/^(?:static\s+)?inline\s+(void\s+add_dir_entry\b)/$1/' "$SQFS"
-          # 2) belt and braces: build the tool with old GNU inline semantics
+          # 2) build the tool with old GNU inline semantics, and pull in
+          #    sys/sysmacros.h for every file (glibc >= 2.28 moved
+          #    major/minor/makedev there -> "undefined reference to `makedev'").
           if ! grep -q 'fgnu89-inline' "$SQFS_MK"; then
-            sed -i 's/-O2/-O2 -fgnu89-inline/' "$SQFS_MK"
+            sed -i 's|-O2|-O2 -fgnu89-inline -include sys/sysmacros.h|' "$SQFS_MK"
           fi
 
           # Ensure the host tools are rebuilt for this runner.
@@ -145,7 +147,7 @@ jobs:
           grep -n '^promission_check:' Makefile
           grep -n '^tools:' Makefile
           grep -n 'add_dir_entry' "$SQFS" | head -3
-          grep -n 'fgnu89-inline' "$SQFS_MK" || true
+          grep -n 'sysmacros' "$SQFS_MK" || true
 
       - name: Build
         run: |
