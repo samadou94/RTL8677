@@ -94,6 +94,14 @@ jobs:
           rm -rf tools/src/mkxml/xmlparser
           grep -q 'RANLIB=ranlib' "$XMLMK"
 
+          # Linux 2.6.30 kernel/timeconst.pl uses defined(@array), which is a
+          # fatal error in Perl >= 5.22 ("Can't use 'defined(@array)'").
+          # Patch the real source file (the build tree only symlinks to it).
+          TC="src/kernel/linux-2.6.30.9/kernel/timeconst.pl"
+          test -f "$TC"
+          perl -pi -e 's/defined\s*\(\s*(\@\w+)\s*\)/$1/g; s/defined\s+(\@\w+)/$1/g' "$TC"
+          if grep -nE 'defined\s*\(?\s*@' "$TC"; then echo "timeconst.pl patch failed"; exit 1; fi
+
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
