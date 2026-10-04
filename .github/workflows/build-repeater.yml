@@ -334,14 +334,49 @@ jobs:
           test -f "$LIBUSB_ROOT/error.c"
           test -f "$LIBUSB_ROOT/descriptors.c"
 
-          # The generated Makefile contains absolute references to the old vendor
-          # "missing" helper. Even after configure --recheck succeeds, GNU make
-          # can invoke that helper from the "configure" target:
+          # The libusb tree was generated on the original vendor build host.
+          # Its Makefile.in/configure files contain absolute references to the
+          # vendor's "missing" helper, e.g.
           #   /home/dslpl3/tangqiang/.../libusb-0.1.12/missing --run autoconf
-          # Replace those stale helper invocations with a successful no-op.
-          sed -i -E \
-            's#/[[:alnum:]_./-]+/missing[[:space:]]+--run#/bin/true --run#g' \
-            "$LIBUSB_ROOT/Makefile"
+          # Patching only Makefile is insufficient: ./configure recreates it from
+          # Makefile.in before the build continues. Replace the stale helper in
+          # every text file in the libusb tree so both configure and make stay local.
+          echo "=== PATCHING STALE LIBUSB AUTOTOOLS PATHS ==="
+          python3 - "$LIBUSB_ROOT" <<'PYLIBUSB'
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          # Match any absolute path ending in /missing when it is immediately
+          # followed by the Automake/Autoconf helper invocation "--run".
+          pattern = re.compile(r"/[^\s\"'`]+/missing(?=\s+--run)")
+
+          patched = 0
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              try:
+                  data = path.read_text(encoding="latin-1")
+              except (OSError, UnicodeError):
+                  continue
+              new_data, count = pattern.subn("/bin/true", data)
+              if count:
+                  path.write_text(new_data, encoding="latin-1", newline="")
+                  print(f"patched {path}: {count} stale helper reference(s)")
+                  patched += count
+
+          print(f"total stale libusb helper references patched: {patched}")
+          PYLIBUSB
+
+          # Patching only Makefile is insufficient: ./configure can recreate it
+          # from Makefile.in before the build continues. Ensure no stale helper
+          # invocation remains anywhere in the libusb source/build metadata.
+          if grep -RIlq 'missing --run' "$LIBUSB_ROOT"; then
+            echo "stale libusb missing helper reference remains"
+            grep -RIn 'missing --run' "$LIBUSB_ROOT" | head -40
+            exit 1
+          fi
 
           # Keep the generated Autotools metadata self-consistent.
           # Touch aclocal.m4 first and Makefile.in last so Make does not consider
@@ -364,53 +399,9 @@ jobs:
           stat "$LIBUSB_ROOT/aclocal.m4" "$LIBUSB_ROOT/Makefile.in"
           test "$LIBUSB_ROOT/Makefile.in" -nt "$LIBUSB_ROOT/aclocal.m4"
 
-          # libusb: even with Makefile patched, "make" regenerated it from
-          # Makefile.in via config.status (because Makefile.in was touched newer),
-          # and config.status still bakes in the vendor host's absolute
-          #   ${SHELL} /home/dslpl3/.../libusb-0.1.12/missing --run autoconf
-          # -> "missing: No such file or directory", Makefile:339 Error 127.
-          # 1) neutralise that helper wherever it is baked in,
-          # 2) give every generated file a consistent, ordered timestamp so make
-          #    never decides to regenerate configure/Makefile.in/config.status.
-          (
-            cd "$LIBUSB_ROOT"
-            for f in config.status Makefile Makefile.in configure; do
-              if [ -f "$f" ]; then
-                sed -i -E 's#(\$\{SHELL\}|/bin/sh|sh) [^ ,;]*/missing --run [A-Za-z0-9._-]+#:#g' "$f"
-              fi
-            done
-            base=$(( $(date +%s) - 30 ))
-            i=0
-            for f in aclocal.m4 configure Makefile.in config.h.in config.status Makefile config.h stamp-h1; do
-              if [ -e "$f" ]; then
-                touch -d "@$(( base + i ))" "$f"
-                i=$(( i + 1 ))
-              fi
-            done
-            echo "=== LIBUSB STALE HELPER CHECK ==="
-            grep -nE '/missing --run' config.status Makefile Makefile.in configure 2>/dev/null || echo "no stale missing helper left"
-            ls -l --time-style=full-iso aclocal.m4 configure Makefile.in config.status Makefile 2>/dev/null || true
-          )
-
           # Re-run the mixed-rule fix on any copies created under the build tree.
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
             -exec python3 /tmp/fix_mixed_rules.py {} \; 2>/dev/null | grep -v ' split 0 ' || true
-
-          # vendor/realtek/adslstart: the vendor Makefile relies on make's built-in
-          # "%: %.o" link rule, which links with no libraries ("undefined reference
-          # to app_item_get"). The -l/-L flags only sit in CFLAGS, which that
-          # rule ignores. Add an explicit link rule that passes them after the object.
-          find "$SDK" -type f -path '*/realtek/adslstart/Makefile' | while read -r mk; do
-            if ! grep -q 'added by CI: adslstart link' "$mk"; then
-              printf '%s\n' \
-                '' \
-                '# added by CI: adslstart link' \
-                'adslstart: adslstart.o' \
-                '	$(CC) adslstart.o -o $@ $(filter -L% -l%,$(CFLAGS)) $(LDFLAGS) $(LDLIBS)' \
-                >> "$mk"
-              echo "patched $mk"
-            fi
-          done
 
           # autoprepare may regenerate the Makefile; patch it again.
           sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
@@ -422,33 +413,9 @@ jobs:
           grep -Eq '^tools:[[:space:]]*$' Makefile
 
           # Compile host tools, kernel subdirectories, and firmware filesystems.
-          # Files created by the sudo stage are root-owned; hand them back on exit
-          # (success or failure) so later steps and the checkout cleanup can use them.
-          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true' EXIT
-
-          # The checkout is a git repo, so the 2.6.30 kernel's CONFIG_LOCALVERSION_AUTO
-          # appends "-g<hash>-dirty" to the version. The SDK hard-codes 2.6.30.9 for
-          # lib/modules, so depmod then fails ("Can't stat .../lib/modules/2.6.30.9").
-          # Stop git discovery at the repo root so the kernel sees no repository.
-          export GIT_CEILING_DIRECTORIES="$GITHUB_WORKSPACE"
-
-          # mkdev.sh creates /dev nodes with mknod, which needs root
-          # ("mknod: mtd0: Operation not permitted" x281), so the rootfs/romfs
-          # stage runs under sudo; everything before it stays unprivileged.
-          run_build() {
-            # Never leave root-owned leftovers for the unprivileged stage to trip on.
-            sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
-            # NOTE: "|| return 1" is required: set -e is ignored inside a function
-            # that is called from an "if" condition, so without it a failed
-            # "make subdirs" would still run the sudo stage on a half-built tree.
-            make subdirs V=1 || return 1
-            sudo -E env "PATH=$PATH" "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" \
-              make rootfs romfs V=1 || return 1
-          }
-
           make tools V=1
 
-          if ! run_build; then
+          if ! make subdirs rootfs romfs V=1; then
             echo "::group::Diagnostics after failed kernel/rootfs build"
             KDIR="$(readlink -f build.DSL2750U/kernel/linux-2.6.30.9)"
             KBSP="$KDIR/arch/rlx/bsp"
@@ -458,10 +425,6 @@ jobs:
             grep -n -i 'adsl' "$KBSP/Makefile" || true
             echo "--- every adsl file in the checkout ---"
             find "$ROOT" -iname '*adsl*' -not -path '*/.git/*' 2>/dev/null | head -40 || true
-            echo "--- which libs define app_item_get ---"
-            find "$SDK/build.DSL2750U" \( -name 'lib*.a' -o -name 'lib*.so*' \) 2>/dev/null | while read -r lib; do
-              rsdk-linux-nm -A "$lib" 2>/dev/null | grep -E ' [TDBR] app_item_get$' || true
-            done
             echo "::endgroup::"
 
             # "No rule to make target arch/rlx/bsp/adsl.o": the BSP Makefile
@@ -486,7 +449,7 @@ jobs:
                 'void EnterHeavyTraffic(void) { }' \
                 'void ExitHeavyTraffic(void) { }' \
                 > "$KBSP/adsl.c"
-              run_build
+              make subdirs rootfs romfs V=1
             else
               echo "Failure was not the missing adsl source; see diagnostics above."
               exit 1
@@ -496,7 +459,6 @@ jobs:
       - name: Collect firmware images
         if: success()
         run: |
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
           mkdir -p "$GITHUB_WORKSPACE/out"
           find "$GITHUB_WORKSPACE/RTL8676xx" \
             \( -name '*.img' -o -name '*.bin' -o -name '*.image' -o -name 'vmlinux*' -o -name '*.squashfs' \) \
