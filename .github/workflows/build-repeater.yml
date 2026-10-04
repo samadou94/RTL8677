@@ -302,6 +302,38 @@ jobs:
           test -f "$LIBUSB_ROOT/Makefile"
           test -f "$LIBUSB_ROOT/aclocal.m4"
 
+          # The vendor checkout contains an incomplete/broken libusb-0.1.12
+          # source tree: the generated build copy can contain only Autotools
+          # metadata (or broken symlinks), so config.status --recheck fails with
+          # "cannot find sources (usb.c)".  Restore the actual libusb 0.1.12
+          # C/header sources without replacing the vendor-generated Makefile or
+          # configure metadata used by this SDK.
+          LIBUSB_TMP=$(mktemp -d)
+          trap 'rm -rf "$LIBUSB_TMP"' EXIT
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o "$LIBUSB_TMP/libusb-0.1.12.tar.gz" \
+            https://downloads.sourceforge.net/libusb/libusb-0.1.12.tar.gz
+          tar -xzf "$LIBUSB_TMP/libusb-0.1.12.tar.gz" -C "$LIBUSB_TMP"
+          LIBUSB_SRC="$LIBUSB_TMP/libusb-0.1.12"
+          test -f "$LIBUSB_SRC/usb.c"
+          test -f "$LIBUSB_SRC/linux.c"
+          test -f "$LIBUSB_SRC/error.c"
+          test -f "$LIBUSB_SRC/descriptors.c"
+
+          # Remove broken source/header symlinks from the generated build tree
+          # before copying real files into it.
+          find "$LIBUSB_ROOT" -maxdepth 1 -type l \
+            \( -name '*.c' -o -name '*.h' \) ! -exec test -e {} \; \
+            -delete
+          find "$LIBUSB_SRC" -maxdepth 1 -type f \
+            \( -name '*.c' -o -name '*.h' \) \
+            -exec cp -f {} "$LIBUSB_ROOT/" \;
+
+          test -f "$LIBUSB_ROOT/usb.c"
+          test -f "$LIBUSB_ROOT/linux.c"
+          test -f "$LIBUSB_ROOT/error.c"
+          test -f "$LIBUSB_ROOT/descriptors.c"
+
           # Ensure the existing generated metadata is newer than its inputs,
           # so make does not need to regenerate aclocal.m4.
           touch "$LIBUSB_ROOT/aclocal.m4"
