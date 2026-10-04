@@ -102,6 +102,48 @@ jobs:
           perl -pi -e 's/defined\s*\(\s*(\@\w+)\s*\)/$1/g; s/defined\s+(\@\w+)/$1/g' "$TC"
           if grep -nE 'defined\s*\(?\s*@' "$TC"; then echo "timeconst.pl patch failed"; exit 1; fi
 
+          # GNU make >= 4.3 made "mixed implicit and normal rules" (e.g.
+          # "config %config:") a fatal error; busybox-1.6.1 and other legacy
+          # kbuild-style Makefiles use it ("No rule to make target 'oldconfig'").
+          # Split such rules into two rules with the same prerequisites/recipe.
+          cat > /tmp/fix_mixed_rules.py <<'PYEOF'
+          import re, sys
+          p = sys.argv[1]
+          lines = open(p, encoding='latin-1').read().split('\n')
+          out, i, n = [], 0, 0
+          hdr = re.compile(r'^([^\s#=:\t$][^:#=\t$]*?)\s*:(?![=:])(.*)$')
+          while i < len(lines):
+              l = lines[i]
+              m = hdr.match(l)
+              if m:
+                  tg = m.group(1).split()
+                  pats = [t for t in tg if '%' in t]
+                  plain = [t for t in tg if '%' not in t]
+                  if pats and plain:
+                      head = [m.group(2)]
+                      j = i + 1
+                      while head[-1].rstrip().endswith('\\') and j < len(lines):
+                          head.append(lines[j]); j += 1
+                      rec = []
+                      while j < len(lines) and (lines[j].startswith('\t') or
+                            (lines[j].strip() == '' and j + 1 < len(lines) and lines[j + 1].startswith('\t'))):
+                          rec.append(lines[j]); j += 1
+                      for group in (plain, pats):
+                          out.append(' '.join(group) + ':' + head[0])
+                          out.extend(head[1:])
+                          out.extend(rec)
+                      n += 1
+                      i = j
+                      continue
+              out.append(l)
+              i += 1
+          open(p, 'w', encoding='latin-1', newline='').write('\n'.join(out))
+          print('%s: split %d mixed rule(s)' % (p, n))
+          PYEOF
+          find "$SDK/src" -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
+            \( -path '*/opensource/*' -o -path '*busybox*' \) \
+            -exec python3 /tmp/fix_mixed_rules.py {} \; | grep -v ' split 0 ' || true
+
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
@@ -181,6 +223,10 @@ jobs:
 
           # Generate the product configuration.
           make autoprepare AUTOPRODUCT=DSL2750U V=1
+
+          # Re-run the mixed-rule fix on any copies created under the build tree.
+          find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
+            -exec python3 /tmp/fix_mixed_rules.py {} \; 2>/dev/null | grep -v ' split 0 ' || true
 
           # autoprepare may regenerate the Makefile; patch it again.
           sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
