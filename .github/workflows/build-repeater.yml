@@ -422,9 +422,28 @@ jobs:
           grep -Eq '^tools:[[:space:]]*$' Makefile
 
           # Compile host tools, kernel subdirectories, and firmware filesystems.
+          # Files created by the sudo stage are root-owned; hand them back on exit
+          # (success or failure) so later steps and the checkout cleanup can use them.
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true' EXIT
+
+          # The checkout is a git repo, so the 2.6.30 kernel's CONFIG_LOCALVERSION_AUTO
+          # appends "-g<hash>-dirty" to the version. The SDK hard-codes 2.6.30.9 for
+          # lib/modules, so depmod then fails ("Can't stat .../lib/modules/2.6.30.9").
+          # Stop git discovery at the repo root so the kernel sees no repository.
+          export GIT_CEILING_DIRECTORIES="$GITHUB_WORKSPACE"
+
+          # mkdev.sh creates /dev nodes with mknod, which needs root
+          # ("mknod: mtd0: Operation not permitted" x281), so the rootfs/romfs
+          # stage runs under sudo; everything before it stays unprivileged.
+          run_build() {
+            make subdirs V=1
+            sudo -E env "PATH=$PATH" "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" \
+              make rootfs romfs V=1
+          }
+
           make tools V=1
 
-          if ! make subdirs rootfs romfs V=1; then
+          if ! run_build; then
             echo "::group::Diagnostics after failed kernel/rootfs build"
             KDIR="$(readlink -f build.DSL2750U/kernel/linux-2.6.30.9)"
             KBSP="$KDIR/arch/rlx/bsp"
@@ -462,7 +481,7 @@ jobs:
                 'void EnterHeavyTraffic(void) { }' \
                 'void ExitHeavyTraffic(void) { }' \
                 > "$KBSP/adsl.c"
-              make subdirs rootfs romfs V=1
+              run_build
             else
               echo "Failure was not the missing adsl source; see diagnostics above."
               exit 1
@@ -472,6 +491,7 @@ jobs:
       - name: Collect firmware images
         if: success()
         run: |
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
           mkdir -p "$GITHUB_WORKSPACE/out"
           find "$GITHUB_WORKSPACE/RTL8676xx" \
             \( -name '*.img' -o -name '*.bin' -o -name '*.image' -o -name 'vmlinux*' -o -name '*.squashfs' \) \
