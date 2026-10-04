@@ -412,6 +412,44 @@ jobs:
           sed -n '/^promission_check:/,/^tools:/p' Makefile
           grep -Eq '^tools:[[:space:]]*$' Makefile
 
+          # adslstart calls app_item_get(), but the generated Makefile in this
+          # legacy SDK has no explicit link rule. GNU make therefore falls back
+          # to its built-in C rule:
+          #   rsdk-linux-gcc adslstart.o -o adslstart
+          # and the link fails with undefined reference to app_item_get.
+          #
+          # SSAP was already built successfully at build/apps/ssap/lib, and the
+          # vendor's other SSAP applications link against libssap.so plus the
+          # tmpdist libraries. Add an explicit adslstart rule with those same
+          # libraries and with the actual absolute build paths.
+          ADSLSTART_DIR="$SDK/build.DSL2750U/vendor/realtek/adslstart"
+          ADSLSTART_MK="$ADSLSTART_DIR/Makefile"
+          test -f "$ADSLSTART_MK"
+          test -f "$SDK/build/apps/ssap/lib/libssap.so"
+          test -f "$SDK/build/tmpdist/lib/libscew.a" -o \
+            -f "$SDK/build/tmpdist/lib/libscew.so"
+
+          if ! grep -q 'CI fix: explicit SSAP link for adslstart' "$ADSLSTART_MK"; then
+            cat >> "$ADSLSTART_MK" <<'EOF'
+          
+          # CI fix: explicit SSAP link for adslstart
+          ADSLSTART_LIBS = -lutil -lssap -L__SDK_BUILD__/apps/ssap/lib -L__SDK_BUILD__/tmpdist/lib -lscew -lexpat -lz
+          
+          adslstart: adslstart.o
+          	@echo "CI: linking adslstart with libssap"
+          	rsdk-linux-gcc adslstart.o -o adslstart $(ADSLSTART_LIBS)
+          EOF
+          fi
+
+          # Substitute the workspace-specific SDK path into the rule without
+          # relying on any vendor Makefile variables that may not be defined in
+          # this subdirectory.
+          sed -i "s#__SDK_BUILD__#$SDK/build#g" "$ADSLSTART_MK"
+
+          echo "=== ADSLSTART LINK CHECK ==="
+          grep -n -A6 'CI fix: explicit SSAP link for adslstart' "$ADSLSTART_MK"
+
+          # Compile host tools, kernel subdirectories, and firmware filesystems.
           # Compile host tools, kernel subdirectories, and firmware filesystems.
           make tools V=1
 
