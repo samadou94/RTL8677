@@ -379,9 +379,13 @@ jobs:
           fi
 
           # Keep the generated Autotools metadata self-consistent.
-          # Touch aclocal.m4 first and Makefile.in last so Make does not consider
-          # Makefile.in older than aclocal.m4.
+          #
+          # These files are symlinks into customer/apps/... in this vendor tree,
+          # and their timestamps can have sub-second resolution. Do not rely on
+          # a same-second "touch A; touch B" sequence: GNU make may still decide
+          # that Makefile.in is stale and trigger the obsolete Automake rules.
           touch "$LIBUSB_ROOT/aclocal.m4"
+          sleep 2
           touch "$LIBUSB_ROOT/Makefile.in"
 
           # Remove stale vendor-host Autotools command variables as another
@@ -397,7 +401,11 @@ jobs:
           grep -nE 'missing --run|^(ACLOCAL|AUTOMAKE|AUTOCONF|AUTOHEADER)[[:space:]]*=' \
             "$LIBUSB_ROOT/Makefile" || true
           stat "$LIBUSB_ROOT/aclocal.m4" "$LIBUSB_ROOT/Makefile.in"
-          test "$LIBUSB_ROOT/Makefile.in" -nt "$LIBUSB_ROOT/aclocal.m4"
+          ACL_MTIME="$(stat -c %Y "$LIBUSB_ROOT/aclocal.m4")"
+          MFIN_MTIME="$(stat -c %Y "$LIBUSB_ROOT/Makefile.in")"
+          echo "aclocal.m4 mtime=$ACL_MTIME"
+          echo "Makefile.in mtime=$MFIN_MTIME"
+          test "$MFIN_MTIME" -ge "$ACL_MTIME"
 
           # Re-run the mixed-rule fix on any copies created under the build tree.
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
