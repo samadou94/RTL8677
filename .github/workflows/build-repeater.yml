@@ -288,6 +288,38 @@ jobs:
           # Generate the product configuration.
           make autoprepare AUTOPRODUCT=DSL2750U V=1
 
+          # libusb-0.1.12 was generated on the original vendor build host and
+          # its generated Makefile contains an absolute path to that host's
+          # "missing" helper:
+          #   /mnt/sda1/.../libusb-0.1.12/missing
+          # The helper is not present in this Git checkout, so GNU make tries
+          # to execute a path that cannot exist on GitHub Actions.
+          #
+          # The release tree already contains the generated Autotools metadata.
+          # Keep it and prevent the obsolete aclocal refresh from running.
+          LIBUSB_ROOT="$SDK/build.DSL2750U/apps/logic/new3g/3g-mngr/usb/libusb-0.1.12"
+          test -d "$LIBUSB_ROOT"
+          test -f "$LIBUSB_ROOT/Makefile"
+          test -f "$LIBUSB_ROOT/aclocal.m4"
+
+          # Ensure the existing generated metadata is newer than its inputs,
+          # so make does not need to regenerate aclocal.m4.
+          touch "$LIBUSB_ROOT/aclocal.m4"
+
+          # Remove stale vendor-host Autotools commands as a safeguard if make
+          # still decides to refresh generated metadata.
+          sed -i -E \
+            -e 's#^ACLOCAL[[:space:]]*=.*$#ACLOCAL = :#' \
+            -e 's#^AUTOMAKE[[:space:]]*=.*$#AUTOMAKE = :#' \
+            -e 's#^AUTOCONF[[:space:]]*=.*$#AUTOCONF = :#' \
+            -e 's#^AUTOHEADER[[:space:]]*=.*$#AUTOHEADER = :#' \
+            "$LIBUSB_ROOT/Makefile"
+
+          echo "=== LIBUSB AUTOTOOLS CHECK ==="
+          grep -nE '^(ACLOCAL|AUTOMAKE|AUTOCONF|AUTOHEADER)[[:space:]]*=' \
+            "$LIBUSB_ROOT/Makefile"
+          stat "$LIBUSB_ROOT/aclocal.m4"
+
           # Re-run the mixed-rule fix on any copies created under the build tree.
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
             -exec python3 /tmp/fix_mixed_rules.py {} \; 2>/dev/null | grep -v ' split 0 ' || true
