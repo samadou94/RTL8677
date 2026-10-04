@@ -177,15 +177,18 @@ jobs:
 
           # pppd (ppp-2.4.3) links without -lcrypt on this runner ("undefined
           # reference to crypt/encrypt/setkey"): its Makefile only adds -lcrypt
-          # when a host-side check passes. Add it unconditionally.
+          # when a host-side check passes (an existing "LIBS += -lcrypt" sits inside
+          # that failing conditional). Append an unconditional one at the very end.
           PPPD="src/opensource/ppp-pppoe/ppp-2.4.3/pppd"
           test -d "$PPPD"
           for mk in "$PPPD/Makefile.linux" "$PPPD/Makefile"; do
-            if [ -f "$mk" ] && ! grep -q 'LIBS[[:space:]]*+=[[:space:]]*-lcrypt' "$mk"; then
+            if [ -f "$mk" ] && ! grep -q 'added by CI: pppd needs libcrypt' "$mk"; then
               printf '\n# added by CI: pppd needs libcrypt (crypt/encrypt/setkey)\nLIBS += -lcrypt\n' >> "$mk"
               echo "patched $mk"
             fi
           done
+          grep -q 'added by CI: pppd needs libcrypt' "$PPPD/Makefile.linux"
+          grep -n -B3 -A3 'lcrypt' "$PPPD/Makefile.linux" | head -40
           echo "--- libcrypt in vendor toolchain ---"
           find "$RSDK" -name 'libcrypt*' 2>/dev/null | head || true
 
