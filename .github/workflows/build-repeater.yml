@@ -368,6 +368,22 @@ jobs:
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
             -exec python3 /tmp/fix_mixed_rules.py {} \; 2>/dev/null | grep -v ' split 0 ' || true
 
+          # vendor/realtek/adslstart: the vendor Makefile relies on make's built-in
+          # "%: %.o" link rule, which links with no libraries ("undefined reference
+          # to app_item_get"). The -l/-L flags only sit in CFLAGS, which that
+          # rule ignores. Add an explicit link rule that passes them after the object.
+          find "$SDK" -type f -path '*/realtek/adslstart/Makefile' | while read -r mk; do
+            if ! grep -q 'added by CI: adslstart link' "$mk"; then
+              printf '%s\n' \
+                '' \
+                '# added by CI: adslstart link' \
+                'adslstart: adslstart.o' \
+                '	$(CC) adslstart.o -o $@ $(filter -L% -l%,$(CFLAGS)) $(LDFLAGS) $(LDLIBS)' \
+                >> "$mk"
+              echo "patched $mk"
+            fi
+          done
+
           # autoprepare may regenerate the Makefile; patch it again.
           sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
           sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
@@ -390,6 +406,10 @@ jobs:
             grep -n -i 'adsl' "$KBSP/Makefile" || true
             echo "--- every adsl file in the checkout ---"
             find "$ROOT" -iname '*adsl*' -not -path '*/.git/*' 2>/dev/null | head -40 || true
+            echo "--- which libs define app_item_get ---"
+            find "$SDK/build.DSL2750U" \( -name 'lib*.a' -o -name 'lib*.so*' \) 2>/dev/null | while read -r lib; do
+              rsdk-linux-nm -A "$lib" 2>/dev/null | grep -E ' [TDBR] app_item_get$' || true
+            done
             echo "::endgroup::"
 
             # "No rule to make target arch/rlx/bsp/adsl.o": the BSP Makefile
