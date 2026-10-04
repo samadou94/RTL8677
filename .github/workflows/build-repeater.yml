@@ -214,8 +214,20 @@ jobs:
                && grep -q 'adsl\.o' "$KBSP/Makefile" \
                && [ ! -e "$KBSP/adsl.c" ] && [ ! -e "$KBSP/adsl.S" ] \
                && [ ! -e "$KBSP/adsl.o" ] && [ ! -e "$KBSP/adsl.o_shipped" ]; then
-              echo "adsl source missing -> creating empty stub adsl.c"
-              printf '/* stub: ADSL BSP source is not part of this repository */\n' > "$KBSP/adsl.c"
+              echo "adsl source missing -> creating stub adsl.c"
+              # The vendor ADSL blob (adsl.o) also provides a few symbols that the
+              # SAR/ATM driver and EOC code reference at the final vmlinux link
+              # (mm_sendEOCmessage, mm_getEOCrxmessage, sendToPort0,
+              # EnterHeavyTraffic, ExitHeavyTraffic). Provide no-op versions so the
+              # kernel links; DSL line support is therefore absent in this image.
+              printf '%s\n' \
+                '/* stub: vendor ADSL blob is not part of this repository */' \
+                'int mm_sendEOCmessage(void) { return 0; }' \
+                'int mm_getEOCrxmessage(void) { return 0; }' \
+                'int sendToPort0(void) { return 0; }' \
+                'void EnterHeavyTraffic(void) { }' \
+                'void ExitHeavyTraffic(void) { }' \
+                > "$KBSP/adsl.c"
               make subdirs rootfs romfs V=1
             else
               echo "Failure was not the missing adsl source; see diagnostics above."
