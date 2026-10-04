@@ -334,9 +334,15 @@ jobs:
           test -f "$LIBUSB_ROOT/error.c"
           test -f "$LIBUSB_ROOT/descriptors.c"
 
-          # Ensure the existing generated metadata is newer than its inputs,
-          # so make does not need to regenerate aclocal.m4.
+          # Keep the vendor-generated Autotools metadata intact. In particular,
+          # Makefile.in must be newer than aclocal.m4; otherwise the generated
+          # Makefile tries to rebuild Makefile.in via the vendor's old
+          # /home/dslpl3/.../missing --run automake-1.8 command.
+          #
+          # Touch aclocal.m4 first, then Makefile.in last, so Make sees
+          # Makefile.in as up-to-date and does not invoke that stale helper.
           touch "$LIBUSB_ROOT/aclocal.m4"
+          touch "$LIBUSB_ROOT/Makefile.in"
 
           # Remove stale vendor-host Autotools commands as a safeguard if make
           # still decides to refresh generated metadata.
@@ -350,7 +356,8 @@ jobs:
           echo "=== LIBUSB AUTOTOOLS CHECK ==="
           grep -nE '^(ACLOCAL|AUTOMAKE|AUTOCONF|AUTOHEADER)[[:space:]]*=' \
             "$LIBUSB_ROOT/Makefile"
-          stat "$LIBUSB_ROOT/aclocal.m4"
+          stat "$LIBUSB_ROOT/aclocal.m4" "$LIBUSB_ROOT/Makefile.in"
+          test "$LIBUSB_ROOT/Makefile.in" -nt "$LIBUSB_ROOT/aclocal.m4"
 
           # Re-run the mixed-rule fix on any copies created under the build tree.
           find "$SDK"/build.DSL2750U/opensource -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
