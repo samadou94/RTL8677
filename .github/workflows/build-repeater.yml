@@ -185,7 +185,35 @@ jobs:
 
           # Compile host tools, kernel subdirectories, and firmware filesystems.
           make tools V=1
-          make subdirs rootfs romfs V=1
+
+          if ! make subdirs rootfs romfs V=1; then
+            echo "::group::Diagnostics after failed kernel/rootfs build"
+            KDIR="$(readlink -f build.DSL2750U/kernel/linux-2.6.30.9)"
+            KBSP="$KDIR/arch/rlx/bsp"
+            echo "KDIR=$KDIR"
+            ls -la "$KBSP" || true
+            echo "--- bsp Makefile (adsl lines) ---"
+            grep -n -i 'adsl' "$KBSP/Makefile" || true
+            echo "--- every adsl file in the checkout ---"
+            find "$ROOT" -iname '*adsl*' -not -path '*/.git/*' 2>/dev/null | head -40 || true
+            echo "::endgroup::"
+
+            # "No rule to make target arch/rlx/bsp/adsl.o": the BSP Makefile
+            # builds adsl.o but no adsl source/object exists in the repo (a
+            # vendor ADSL file that was never committed). This repeater build
+            # does not use ADSL, so build an empty adsl.o and continue.
+            if [ -f "$KBSP/Makefile" ] \
+               && grep -q 'adsl\.o' "$KBSP/Makefile" \
+               && [ ! -e "$KBSP/adsl.c" ] && [ ! -e "$KBSP/adsl.S" ] \
+               && [ ! -e "$KBSP/adsl.o" ] && [ ! -e "$KBSP/adsl.o_shipped" ]; then
+              echo "adsl source missing -> creating empty stub adsl.c"
+              printf '/* stub: ADSL BSP source is not part of this repository */\n' > "$KBSP/adsl.c"
+              make subdirs rootfs romfs V=1
+            else
+              echo "Failure was not the missing adsl source; see diagnostics above."
+              exit 1
+            fi
+          fi
 
       - name: Collect firmware images
         if: success()
