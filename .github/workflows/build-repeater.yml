@@ -31,6 +31,12 @@ jobs:
             libtool \
             m4
 
+          # The vendor SDK assumes /bin/sh is bash (brace expansion like
+          # lib{ssl,crypto}.so*, [[ ]], "function", "source"). Ubuntu's /bin/sh is
+          # dash, which breaks all of those. Point sh at bash on this runner.
+          sudo ln -sf /bin/bash /bin/sh
+          ls -l /bin/sh
+
       - name: Prepare legacy SDK
         run: |
           set -euo pipefail
