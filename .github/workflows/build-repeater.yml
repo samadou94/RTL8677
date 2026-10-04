@@ -25,7 +25,11 @@ jobs:
             subversion \
             ncurses-dev \
             libncurses5-dev \
-            libattr1-dev
+            libattr1-dev \
+            autoconf \
+            automake \
+            libtool \
+            m4
 
       - name: Prepare legacy SDK
         run: |
@@ -143,6 +147,27 @@ jobs:
           find "$SDK/src" -type f \( -name Makefile -o -name 'Makefile.*' -o -name '*.mk' \) \
             \( -path '*/opensource/*' -o -path '*busybox*' \) \
             -exec python3 /tmp/fix_mixed_rules.py {} \; | grep -v ' split 0 ' || true
+
+          # iptables-1.4.6: "/bin/sh: ./configure: not found" means the script is
+          # missing, or has CRLF line endings (bad "#!/bin/sh\r" interpreter).
+          IPT="src/opensource/iptables/iptables-1.4.6"
+          test -d "$IPT"
+          echo "--- iptables source dir before fix ---"
+          ls -la "$IPT" | head -40
+          # strip CRs from all text files, then restore executable bits
+          grep -rIl $'\r' "$IPT" 2>/dev/null | xargs -r sed -i 's/\r$//' || true
+          for f in configure config.sub config.guess install-sh missing depcomp ltmain.sh compile autogen.sh; do
+            [ -f "$IPT/$f" ] && chmod +x "$IPT/$f" || true
+          done
+          # if configure was never committed, regenerate it
+          if [ ! -f "$IPT/configure" ]; then
+            echo "configure missing -> running autoreconf"
+            test -f "$IPT/configure.ac" -o -f "$IPT/configure.in"
+            (cd "$IPT" && autoreconf -fi)
+          fi
+          test -x "$IPT/configure" || chmod +x "$IPT/configure"
+          head -1 "$IPT/configure"
+          test -f "$IPT/configure"
 
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
