@@ -175,6 +175,20 @@ jobs:
           head -1 "$IPT/configure"
           test -f "$IPT/configure"
 
+          # pppd (ppp-2.4.3) links without -lcrypt on this runner ("undefined
+          # reference to crypt/encrypt/setkey"): its Makefile only adds -lcrypt
+          # when a host-side check passes. Add it unconditionally.
+          PPPD="src/opensource/ppp-pppoe/ppp-2.4.3/pppd"
+          test -d "$PPPD"
+          for mk in "$PPPD/Makefile.linux" "$PPPD/Makefile"; do
+            if [ -f "$mk" ] && ! grep -q 'LIBS[[:space:]]*+=[[:space:]]*-lcrypt' "$mk"; then
+              printf '\n# added by CI: pppd needs libcrypt (crypt/encrypt/setkey)\nLIBS += -lcrypt\n' >> "$mk"
+              echo "patched $mk"
+            fi
+          done
+          echo "--- libcrypt in vendor toolchain ---"
+          find "$RSDK" -name 'libcrypt*' 2>/dev/null | head || true
+
           # Ensure the host tools are rebuilt for this runner.
           rm -f "${SQFS%.c}.o"
           perl -pi -e 's/^OBJS = conf mconf$/OBJS = conf/' scripts/Makefile
