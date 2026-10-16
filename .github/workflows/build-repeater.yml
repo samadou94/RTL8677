@@ -489,7 +489,38 @@ jobs:
                 'void EnterHeavyTraffic(void) { }' \
                 'void ExitHeavyTraffic(void) { }' \
                 > "$KBSP/adsl.c"
-              make subdirs rootfs romfs V=1
+              # The next attempt may reach kernel module installation and fail
+              # because the vendor depmod rule expects 2.6.30.9, while this Git
+              # checkout's kernel scripts install modules under a SCM-suffixed
+              # release such as 2.6.30.9-gc1fb8726-dirty.
+              if ! make subdirs rootfs romfs V=1; then
+                echo "::group::Diagnostics after ADSL stub retry"
+                MODROOT="$SDK/build/romfs/rootfs/lib/modules"
+                EXPECTED_MODULE_DIR="$MODROOT/2.6.30.9"
+                echo "Expected module directory: $EXPECTED_MODULE_DIR"
+                echo "--- installed kernel module release directories ---"
+                ls -la "$MODROOT" || true
+
+                if [ ! -e "$EXPECTED_MODULE_DIR" ]; then
+                  RELEASE_DIR="$(find "$MODROOT" -mindepth 1 -maxdepth 1 \
+                    -type d -name '2.6.30.9-*' -print -quit 2>/dev/null || true)"
+                  if [ -n "$RELEASE_DIR" ]; then
+                    echo "Kernel modules are under $(basename "$RELEASE_DIR"); creating compatibility symlink."
+                    ln -s "$(basename "$RELEASE_DIR")" "$EXPECTED_MODULE_DIR"
+                    ls -l "$EXPECTED_MODULE_DIR"
+                    echo "::endgroup::"
+                    make subdirs rootfs romfs V=1
+                  else
+                    echo "No SCM-suffixed 2.6.30.9 module directory was found."
+                    echo "::endgroup::"
+                    exit 1
+                  fi
+                else
+                  echo "Kernel/rootfs build still failed after the ADSL stub; see logs above."
+                  echo "::endgroup::"
+                  exit 1
+                fi
+              fi
             else
               echo "Failure was not the missing adsl source; see diagnostics above."
               exit 1
