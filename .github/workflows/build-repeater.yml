@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
 
 jobs:
   build:
@@ -244,6 +246,17 @@ jobs:
             fi
           done
 
+          # The vendor kernel install Makefile assumes the release is exactly
+          # 2.6.30.9. Linux 2.6.30 otherwise appends the checkout's SCM revision
+          # and "-dirty" (because this workflow patches tracked SDK files),
+          # placing modules under a different directory and breaking depmod.pl.
+          if grep -q '^CONFIG_LOCALVERSION_AUTO=y$' "$CFG"; then
+            sed -i 's/^CONFIG_LOCALVERSION_AUTO=y$/# CONFIG_LOCALVERSION_AUTO is not set/' "$CFG"
+          elif ! grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$CFG"; then
+            printf '\n# CONFIG_LOCALVERSION_AUTO is not set\n' >> "$CFG"
+          fi
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$CFG"
+
           # Validate the expected configuration and patches.
           grep -Eq '^tools:[[:space:]]*$' Makefile
           grep -q 'unsigned int major_num = major(buf->st_rdev);' "$SQFS"
@@ -287,6 +300,10 @@ jobs:
 
           # Generate the product configuration.
           make autoprepare AUTOPRODUCT=DSL2750U V=1
+
+          # Confirm the generated config retained the stable kernel release.
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$SDK/build/.config"
+          echo "CONFIG_LOCALVERSION_AUTO disabled; expected module path: 2.6.30.9"
 
           # libusb-0.1.12 was generated on the original vendor build host and
           # its generated Makefile contains an absolute path to that host's

@@ -17,6 +17,9 @@
 
 #include "pppoe.h"
 
+/* The standalone probe has no pppd option parser; use its default vendor mode. */
+int g_flag_value = 0;
+
 char *xstrdup(const char *s);
 void usage(void);
 
