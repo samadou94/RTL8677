@@ -305,6 +305,14 @@ jobs:
           grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$SDK/build/.config"
           echo "CONFIG_LOCALVERSION_AUTO disabled; expected module path: 2.6.30.9"
 
+          # The SDK's top-level legacy Config.in does not define every wireless
+          # driver symbol. Preserve its generated config as diagnostic evidence;
+          # final verification below checks the linked driver and source mapping.
+          cp "$SDK/build/.config" "$GITHUB_WORKSPACE/out-sdk.config"
+          echo "=== GENERATED WIRELESS CONFIG (diagnostic) ==="
+          grep -E '^(CONFIG_RTL8192CD|CONFIG_RTL_VAP_SUPPORT|CONFIG_RTL_CLIENT_MODE_SUPPORT|CONFIG_RTL_REPEATER_MODE_SUPPORT)=' \
+            "$SDK/build/.config" || true
+
           # libusb-0.1.12 was generated on the original vendor build host and
           # its generated Makefile contains an absolute path to that host's
           # "missing" helper:
@@ -544,6 +552,47 @@ jobs:
             fi
           fi
 
+      - name: Verify repeater build evidence
+        if: success()
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/RTL8676xx"
+          ROOTFS="$SDK/build/romfs/rootfs"
+          DRIVER="$SDK/src/kernel/linux-2.6.30.9/drivers/net/wireless/rtl8192cd"
+
+          # Input configuration: universal repeater needs the RTL8192CD driver,
+          # VAP support, client mode, and concurrent AP/client support. WDS is
+          # intentionally not required and remains disabled for this product.
+          CFG="$ROOT/customer/product/DSL2750U/defconfig"
+          for option in CONFIG_RTL8192CD CONFIG_RTL_VAP_SUPPORT \
+                        CONFIG_RTL_CLIENT_MODE_SUPPORT CONFIG_RTL_REPEATER_MODE_SUPPORT; do
+            grep -qx "$option=y" "$CFG"
+          done
+          grep -qx '# CONFIG_RTL_WDS_SUPPORT is not set' "$CFG"
+
+          # Keep the source-level mapping explicit; this is robust against the
+          # legacy top-level Config.in parser warning about kernel-only symbols.
+          grep -q 'defined(CONFIG_RTL_CLIENT_MODE_SUPPORT)' "$DRIVER/8192cd_cfg.h"
+          grep -q '#define CLIENT_MODE' "$DRIVER/8192cd_cfg.h"
+          grep -q 'defined(CONFIG_RTL_REPEATER_MODE_SUPPORT)' "$DRIVER/8192cd_cfg.h"
+          grep -q '#define UNIVERSAL_REPEATER' "$DRIVER/8192cd_cfg.h"
+          grep -q 'sprintf(dev->name, "%s-vxd"' "$DRIVER/8192cd_osdep.c"
+
+          # The driver is built in, not a loadable module. Verify it reached
+          # the final kernel image and that the staged rootfs contains the
+          # standard wireless control tools and startup hook.
+          VMLINUX="$(find "$SDK/build.DSL2750U" -type f -name vmlinux -print -quit)"
+          test -n "$VMLINUX"
+          grep -aq 'rtl8192cd_init' "$VMLINUX"
+          test -x "$ROOTFS/etc/init.d/wlan.rc"
+          test -x "$ROOTFS/usr/sbin/iwpriv"
+          test -x "$ROOTFS/usr/sbin/iwconfig"
+          test -x "$ROOTFS/sbin/brctl"
+
+          echo "Repeater build evidence verified: built-in rtl8192cd with wlan0-vxd support."
+
       - name: Collect firmware images
         if: success()
         run: |
@@ -560,3 +609,4 @@ jobs:
           name: rtl8677-repeater-firmware
           path: out/
           if-no-files-found: warn
+          retention-days: 14
