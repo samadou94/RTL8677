@@ -593,6 +593,17 @@ jobs:
 
           echo "Repeater build evidence verified: built-in rtl8192cd with wlan0-vxd support."
 
+      - name: Verify DSL-2750U flash layout
+        if: success()
+        run: |
+          set -euo pipefail
+          ROMFS="$GITHUB_WORKSPACE/RTL8676xx/build/romfs"
+          KERNEL_LIMIT=1800960
+          ROOTFS_LIMIT=4915200
+          test "$(stat -c%s "$ROMFS/vmlinux.bin.lzma")" -le "$KERNEL_LIMIT"
+          test "$(stat -c%s "$ROMFS/rootfs.img")" -le "$ROOTFS_LIMIT"
+          echo "Verified live DSL-2750U limits: kernel <= $KERNEL_LIMIT bytes; rootfs <= $ROOTFS_LIMIT bytes."
+
       - name: Collect firmware images
         if: success()
         run: |
