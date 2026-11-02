@@ -136,23 +136,26 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding="latin-1")
-          old = """libopt:
-          \t-$(Q)if [ ! -d ${BUILDDIR}/templib ]; then mkdir -p ${BUILDDIR}/templib; fi;
-          \t-$(Q)python $(ROOTDIR)/tools/mklibs.py -D -L $(FSROOT)/lib/ -L $(TOOLCHAINS_SYSROOT)/lib/ --target=$(TOOLCHAINS_PATH)/$(CROSS_COMPILE) -d ${BUILDDIR}/templib `find $(FSROOT) -path $(FSROOT)/lib -prune -o -type f -print | file -f - | grep ELF | cut -d':' -f1`
-          \t-$(Q)cp ${BUILDDIR}/templib/* ${FSROOT}/lib/
-          """
-          new = """libopt:
+          import re
+
+          # Match only the libopt target and its consecutive recipe lines.
+          # This tolerates whitespace differences in the vendor Makefile.
+          pattern = re.compile(r"(?ms)^libopt:[ \t]*\r?\n(?:^[ \t]+[^\r\n]*(?:\r?\n|$))+")
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(f"Expected one libopt target block, found {len(matches)}")
+          match = matches[0]
+          old_block = match.group(0)
+          if old_block.count("mklibs.py") != 1 or "templib" not in old_block:
+              raise SystemExit("Matched libopt block does not contain expected mklibs/templib recipe")
+          new_block = """libopt:
           \t$(Q)rm -rf ${BUILDDIR}/templib
           \t$(Q)mkdir -p ${BUILDDIR}/templib
           \t$(Q)python3 $(ROOTDIR)/tools/mklibs.py -D -L $(FSROOT)/lib/ -L $(TOOLCHAINS_SYSROOT)/lib/ --target=$(TOOLCHAINS_PATH)/$(CROSS_COMPILE) -d ${BUILDDIR}/templib `find $(FSROOT) -path $(FSROOT)/lib -prune -o -type f -print | file -f - | grep ELF | cut -d':' -f1`
           \t$(Q)test -n "$$(find ${BUILDDIR}/templib -maxdepth 1 -type f -print -quit)" || { echo "mklibs produced no reduced libraries"; exit 1; }
           \t$(Q)cp -f ${BUILDDIR}/templib/* ${FSROOT}/lib/
           """
-          if source.count(old) != 1:
-              raise SystemExit(
-                  f"Expected exactly one original libopt recipe, found {source.count(old)}"
-              )
-          source = source.replace(old, new)
+          source = source[:match.start()] + new_block + source[match.end():]
           old_link = "\t-ln -sf ../../../../var/openusb ${FSROOT}/usr/www/html/gui/openusb"
           new_link = (
               "\t@if [ -d ${FSROOT}/usr/www/html/gui ]; then \\\n"
