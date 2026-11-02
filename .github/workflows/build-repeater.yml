@@ -84,7 +84,7 @@ jobs:
           from pathlib import Path
 
           path = Path(sys.argv[1])
-          source = path.read_text(encoding="latin-1")
+          source = path.read_text(encoding="latin-1").expandtabs(8)
           old_status = "os.WEXITSTATUS(status)"
           count = source.count(old_status)
           if count != 2:
@@ -96,11 +96,34 @@ jobs:
               raise SystemExit("Python 2 commands API was not converted to subprocess")
           if "commands.getstatusoutput" in source:
               raise SystemExit("Unconverted commands.getstatusoutput remains")
+
+          # Python 3 removed the old string-module functions used throughout
+          # this vendor script. Restore their Python 2 behavior explicitly.
+          compatibility = """\n# Compatibility for the Python 2 string module API.\nif not hasattr(string, "join"):\n    string.join = lambda sequence, separator=" ": separator.join(sequence)\nif not hasattr(string, "split"):\n    string.split = lambda value, separator=None: value.split(separator)\nif not hasattr(string, "rfind"):\n    string.rfind = lambda value, needle: value.rfind(needle)\n"""
+          if "import string\\n" not in source:
+              raise SystemExit("Could not locate string import in converted mklibs.py")
+          source = source.replace("import string\\n", "import string\\n" + compatibility, 1)
+
+          # Convert Python 2 string exceptions into proper Python 3 exceptions.
+          exception_replacements = {
+              'raise "Cannot find lib: " + obj': 'raise RuntimeError("Cannot find lib: " + obj)',
+              'raise "Cannot find lib" + obj': 'raise RuntimeError("Cannot find lib" + obj)',
+              'raise "Unresolvable symbol " + symbol': 'raise RuntimeError("Unresolvable symbol " + symbol)',
+          }
+          for before, after in exception_replacements.items():
+              found = source.count(before)
+              if not found:
+                  raise SystemExit(f"Expected legacy exception expression not found: {before}")
+              source = source.replace(before, after)
+
           with path.open("w", encoding="latin-1", newline="") as stream:
               stream.write(source)
           PYMK
           python3 -m py_compile "$SDK/tools/mklibs.py"
+          python3 "$SDK/tools/mklibs.py" -L /tmp --help > /tmp/mklibs-help.log
+          grep -q 'Make a set of minimal libraries' /tmp/mklibs-help.log
           grep -q 'subprocess.getstatusoutput' "$SDK/tools/mklibs.py"
+          grep -q 'string.join = ' "$SDK/tools/mklibs.py"
           ! grep -q 'os.WEXITSTATUS(status)' "$SDK/tools/mklibs.py"
 
           # Do not silently ignore library optimization failures. The vendor
