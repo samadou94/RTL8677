@@ -618,11 +618,43 @@ jobs:
       - name: Collect firmware images
         if: success()
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          find "$GITHUB_WORKSPACE/RTL8676xx" \
-            \( -name '*.img' -o -name '*.bin' -o -name '*.image' -o -name 'vmlinux*' -o -name '*.squashfs' \) \
-            -newer "$GITHUB_WORKSPACE/RTL8676xx/Makefile" \
-            -exec cp -v --parents {} "$GITHUB_WORKSPACE/out/" \; || true
+          set -euo pipefail
+          SDK="$GITHUB_WORKSPACE/RTL8676xx"
+          ROMFS="$SDK/build/romfs"
+          OUT="$GITHUB_WORKSPACE/out"
+          mkdir -p "$OUT"
+
+          # Require the exact firmware outputs that passed the flash-layout check.
+          for file in image.img image.bin DSL2750U.img DSL2750U.bin rootfs.img vmlinux.bin.lzma bootloader.bin; do
+            test -s "$ROMFS/$file" || { echo "::error::Required firmware output missing: $ROMFS/$file"; exit 1; }
+            cp -v "$ROMFS/$file" "$OUT/$file"
+          done
+
+          cat > "$OUT/README.txt" <<'EOF'
+          RTL8677 / DSL-2750U repeater firmware build
+          ============================================
+
+          image.img is the vendor-documented Web UI upgrade image.
+          image.bin is the combined image output; do not use it unless the
+          device's recovery/flash procedure explicitly requires that format.
+
+          The build passed the repository's kernel and rootfs size checks.
+          This does not guarantee compatibility with every DSL-2750U hardware
+          revision or prove that flashing is safe. Confirm the exact hardware
+          revision and retain a verified recovery method before installation.
+          EOF
+
+          {
+            echo "Build commit: $GITHUB_SHA"
+            echo "Kernel limit: 1800960 bytes"
+            echo "Rootfs limit: 4915200 bytes"
+            echo
+            for file in image.img image.bin DSL2750U.img DSL2750U.bin rootfs.img vmlinux.bin.lzma bootloader.bin; do
+              printf '%-24s %s bytes\n' "$file" "$(stat -c%s "$OUT/$file")"
+            done
+            echo
+            sha256sum "$OUT"/image.img "$OUT"/image.bin "$OUT"/DSL2750U.img "$OUT"/DSL2750U.bin "$OUT"/rootfs.img "$OUT"/vmlinux.bin.lzma "$OUT"/bootloader.bin
+          } > "$OUT/MANIFEST.txt"
 
       - name: Upload firmware
         if: success()
