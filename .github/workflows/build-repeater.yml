@@ -176,8 +176,10 @@ jobs:
           echo "=== VERIFIED ROOTFS BUILD FIXES ==="
           grep -n -A5 '^libopt:' "$SDK/Makefile"
           grep -n -B1 -A5 'optional openusb link' "$SDK/Makefile"
-          git -C "$ROOT" diff --check
-          git -C "$ROOT" diff -- RTL8676xx/Makefile RTL8676xx/tools/mklibs.py
+          grep -Fq '$(Q)python3 $(ROOTDIR)/tools/mklibs.py' "$SDK/Makefile"
+          ! grep -Fq '$(Q)python $(ROOTDIR)/tools/mklibs.py' "$SDK/Makefile"
+          grep -Fq 'Skipping optional openusb link: TF_GUI is disabled' "$SDK/Makefile"
+          python3 -m py_compile "$SDK/tools/mklibs.py"
 
           # Fix SquashFS 4.1 for modern glibc / GCC.
           SQFS="tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c"
