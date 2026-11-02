@@ -600,9 +600,20 @@ jobs:
           ROMFS="$GITHUB_WORKSPACE/RTL8676xx/build/romfs"
           KERNEL_LIMIT=1800960
           ROOTFS_LIMIT=4915200
-          test "$(stat -c%s "$ROMFS/vmlinux.bin.lzma")" -le "$KERNEL_LIMIT"
-          test "$(stat -c%s "$ROMFS/rootfs.img")" -le "$ROOTFS_LIMIT"
-          echo "Verified live DSL-2750U limits: kernel <= $KERNEL_LIMIT bytes; rootfs <= $ROOTFS_LIMIT bytes."
+          KERNEL_SIZE="$(stat -c%s "$ROMFS/vmlinux.bin.lzma")"
+          ROOTFS_SIZE="$(stat -c%s "$ROMFS/rootfs.img")"
+          echo "DSL-2750U flash layout:"
+          printf '  kernel: %s bytes (limit %s; %s KiB)\n' "$KERNEL_SIZE" "$KERNEL_LIMIT" "$((KERNEL_SIZE / 1024))"
+          printf '  rootfs: %s bytes (limit %s; %s KiB)\n' "$ROOTFS_SIZE" "$ROOTFS_LIMIT" "$((ROOTFS_SIZE / 1024))"
+          if [ "$KERNEL_SIZE" -gt "$KERNEL_LIMIT" ]; then
+            echo "::error::Kernel exceeds DSL-2750U partition limit by $((KERNEL_SIZE - KERNEL_LIMIT)) bytes."
+            exit 1
+          fi
+          if [ "$ROOTFS_SIZE" -gt "$ROOTFS_LIMIT" ]; then
+            echo "::error::Rootfs exceeds DSL-2750U partition limit by $((ROOTFS_SIZE - ROOTFS_LIMIT)) bytes."
+            exit 1
+          fi
+          echo "Verified live DSL-2750U flash-partition limits."
 
       - name: Collect firmware images
         if: success()
