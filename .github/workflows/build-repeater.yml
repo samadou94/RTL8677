@@ -653,7 +653,7 @@ jobs:
               printf '%-24s %s bytes\n' "$file" "$(stat -c%s "$OUT/$file")"
             done
             echo
-            sha256sum "$OUT"/image.img "$OUT"/image.bin "$OUT"/DSL2750U.img "$OUT"/DSL2750U.bin "$OUT"/rootfs.img "$OUT"/vmlinux.bin.lzma "$OUT"/bootloader.bin
+            (cd "$OUT" && sha256sum image.img image.bin DSL2750U.img DSL2750U.bin rootfs.img vmlinux.bin.lzma bootloader.bin)
           } > "$OUT/MANIFEST.txt"
 
       - name: Upload firmware
