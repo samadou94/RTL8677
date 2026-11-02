@@ -31,7 +31,8 @@ jobs:
             autoconf \
             automake \
             libtool \
-            m4
+            m4 \
+            python3-lib2to3
 
           # The vendor SDK assumes /bin/sh is bash (brace expansion like
           # lib{ssl,crypto}.so*, [[ ]], "function", "source"). Ubuntu's /bin/sh is
@@ -72,6 +73,85 @@ jobs:
           sed -i '/^promission_check:$/,/^tools:/{/^promission_check:$/!{/^tools:/!d}}' Makefile
           sed -i '/^promission_check:$/c\promission_check: ; @echo "Skipping legacy SUID permission check"' Makefile
           sed -i '/^[[:space:]]*tools:[[:space:]]*promission_check[[:space:]]*$/c\tools:' Makefile
+
+          # The vendor mklibs.py is Python 2. Convert it for the Ubuntu 22.04
+          # runner, and adapt commands.getstatusoutput() semantics: Python 2
+          # returned an encoded wait status while subprocess.getstatusoutput()
+          # returns the plain exit code.
+          python3 -m lib2to3 -w -n "$SDK/tools/mklibs.py"
+          python3 - "$SDK/tools/mklibs.py" <<'PYMK'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="latin-1")
+          old_status = "os.WEXITSTATUS(status)"
+          count = source.count(old_status)
+          if count != 2:
+              raise SystemExit(
+                  f"Expected two legacy wait-status checks in mklibs.py, found {count}"
+              )
+          source = source.replace(old_status, "status")
+          if "subprocess.getstatusoutput" not in source:
+              raise SystemExit("Python 2 commands API was not converted to subprocess")
+          if "commands.getstatusoutput" in source:
+              raise SystemExit("Unconverted commands.getstatusoutput remains")
+          with path.open("w", encoding="latin-1", newline="") as stream:
+              stream.write(source)
+          PYMK
+          python3 -m py_compile "$SDK/tools/mklibs.py"
+          grep -q 'subprocess.getstatusoutput' "$SDK/tools/mklibs.py"
+          ! grep -q 'os.WEXITSTATUS(status)' "$SDK/tools/mklibs.py"
+
+          # Do not silently ignore library optimization failures. The vendor
+          # buildRootfs.sh has already staged the base runtime libraries; this
+          # step reduces/copies the additional dependency set. Require mklibs
+          # to run successfully and produce output before continuing.
+          python3 - "$SDK/Makefile" <<'PYMKMAKE'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="latin-1")
+          old = """libopt:
+          \t-$(Q)if [ ! -d ${BUILDDIR}/templib ]; then mkdir -p ${BUILDDIR}/templib; fi;
+          \t-$(Q)python $(ROOTDIR)/tools/mklibs.py -D -L $(FSROOT)/lib/ -L $(TOOLCHAINS_SYSROOT)/lib/ --target=$(TOOLCHAINS_PATH)/$(CROSS_COMPILE) -d ${BUILDDIR}/templib `find $(FSROOT) -path $(FSROOT)/lib -prune -o -type f -print | file -f - | grep ELF | cut -d':' -f1`
+          \t-$(Q)cp ${BUILDDIR}/templib/* ${FSROOT}/lib/
+          """
+          new = """libopt:
+          \t$(Q)rm -rf ${BUILDDIR}/templib
+          \t$(Q)mkdir -p ${BUILDDIR}/templib
+          \t$(Q)python3 $(ROOTDIR)/tools/mklibs.py -D -L $(FSROOT)/lib/ -L $(TOOLCHAINS_SYSROOT)/lib/ --target=$(TOOLCHAINS_PATH)/$(CROSS_COMPILE) -d ${BUILDDIR}/templib `find $(FSROOT) -path $(FSROOT)/lib -prune -o -type f -print | file -f - | grep ELF | cut -d':' -f1`
+          \t$(Q)test -n "$$(find ${BUILDDIR}/templib -maxdepth 1 -type f -print -quit)" || { echo "mklibs produced no reduced libraries"; exit 1; }
+          \t$(Q)cp -f ${BUILDDIR}/templib/* ${FSROOT}/lib/
+          """
+          if source.count(old) != 1:
+              raise SystemExit(
+                  f"Expected exactly one original libopt recipe, found {source.count(old)}"
+              )
+          source = source.replace(old, new)
+          old_link = "\t-ln -sf ../../../../var/openusb ${FSROOT}/usr/www/html/gui/openusb"
+          new_link = (
+              "\t@if [ -d ${FSROOT}/usr/www/html/gui ]; then \\\n"
+              "\t\tln -sf ../../../../var/openusb ${FSROOT}/usr/www/html/gui/openusb; \\\n"
+              "\telse \\\n"
+              "\t\techo 'Skipping optional openusb link: TF_GUI is disabled'; \\\n"
+              "\tfi"
+          )
+          if source.count(old_link) != 1:
+              raise SystemExit(
+                  f"Expected exactly one openusb link recipe, found {source.count(old_link)}"
+              )
+          source = source.replace(old_link, new_link)
+          with path.open("w", encoding="latin-1", newline="") as stream:
+              stream.write(source)
+          PYMKMAKE
+
+          echo "=== VERIFIED ROOTFS BUILD FIXES ==="
+          grep -n -A5 '^libopt:' "$SDK/Makefile"
+          grep -n -B1 -A5 'optional openusb link' "$SDK/Makefile"
+          git -C "$ROOT" diff --check
+          git -C "$ROOT" diff -- RTL8676xx/Makefile RTL8676xx/tools/mklibs.py
 
           # Fix SquashFS 4.1 for modern glibc / GCC.
           SQFS="tools/src/sqlzma/squashfs4.1/squashfs-tools/mksquashfs.c"
