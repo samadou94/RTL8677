@@ -100,9 +100,9 @@ jobs:
           # Python 3 removed the old string-module functions used throughout
           # this vendor script. Restore their Python 2 behavior explicitly.
           compatibility = """\n# Compatibility for the Python 2 string module API.\nif not hasattr(string, "join"):\n    string.join = lambda sequence, separator=" ": separator.join(sequence)\nif not hasattr(string, "split"):\n    string.split = lambda value, separator=None: value.split(separator)\nif not hasattr(string, "rfind"):\n    string.rfind = lambda value, needle: value.rfind(needle)\n"""
-          if "import string\\n" not in source:
+          if "import string\n" not in source:
               raise SystemExit("Could not locate string import in converted mklibs.py")
-          source = source.replace("import string\\n", "import string\\n" + compatibility, 1)
+          source = source.replace("import string\n", "import string\n" + compatibility, 1)
 
           # Convert Python 2 string exceptions into proper Python 3 exceptions.
           exception_replacements = {
