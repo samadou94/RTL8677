@@ -78,6 +78,27 @@ jobs:
           # runner, and adapt commands.getstatusoutput() semantics: Python 2
           # returned an encoded wait status while subprocess.getstatusoutput()
           # returns the plain exit code.
+          # Normalize the vendor Python 2 source before lib2to3 parses it.
+          # The file mixes tabs and spaces in nested blocks; expanding tabs first
+          # avoids lib2to3 emitting invalid Python 3 indentation.
+          # Python 2 read() returned byte strings, so preserve that behavior for
+          # ELF inputs scanned below instead of allowing Python 3 UTF-8 decoding.
+          python3 - "$SDK/tools/mklibs.py" <<'PYMKPRE'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="latin-1").expandtabs(8)
+          old_probe = "open(prog).read(256)"
+          new_probe = 'open(prog, "rb").read(256).decode("latin-1")'
+          if source.count(old_probe) != 1:
+              raise SystemExit(
+                  f"Expected one mklibs executable probe, found {source.count(old_probe)}"
+              )
+          source = source.replace(old_probe, new_probe)
+          path.write_text(source, encoding="latin-1", newline="")
+          PYMKPRE
+
           python3 -m lib2to3 -w -n "$SDK/tools/mklibs.py"
           python3 - "$SDK/tools/mklibs.py" <<'PYMK'
           import sys
@@ -120,6 +141,7 @@ jobs:
               stream.write(source)
           PYMK
           python3 -m py_compile "$SDK/tools/mklibs.py"
+          grep -Fq 'open(prog, "rb").read(256).decode("latin-1")' "$SDK/tools/mklibs.py"
           python3 "$SDK/tools/mklibs.py" -L /tmp --help > /tmp/mklibs-help.log
           grep -q 'Make a set of minimal libraries' /tmp/mklibs-help.log
           grep -q 'subprocess.getstatusoutput' "$SDK/tools/mklibs.py"
